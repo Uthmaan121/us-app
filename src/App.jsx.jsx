@@ -5,7 +5,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
    CONFIG  — fill in your Firebase details
 ════════════════════════════════════════════ */
 const NFC_TOKEN     = "8f4a2b7c1d3e9f5a6b8c0d4e1f2a3b5c"; // ← write this onto your NFC tag
-const NFC_TIMEOUT   = 30_000;                              // 30 seconds
+const NFC_TIMEOUT   = 12 * 60 * 60 * 1000;               // 12 hours
 const ALLOWED_EMAILS= ["hyphen080@gmail.com","malikareebah157@gmail.com"];
 const MAX_USERS     = 2;
 const DEF_START     = "2026-04-14";
@@ -63,19 +63,29 @@ function dbListen(path,cb){
   }catch{return()=>{};}
 }
 
-/* ── NFC validation ─────────────────────────────────────── */
-function nfcCheck(){
-  const p=new URLSearchParams(window.location.search);
-  if(p.get("nfc")===NFC_TOKEN){
-    sessionStorage.setItem("nfc_ts",Date.now());
-    sessionStorage.setItem("nfc_ok","1");
-    window.history.replaceState({},"","/"); // hide URL
-    return true;
-  }
-  const ts=+sessionStorage.getItem("nfc_ts")||0;
-  return sessionStorage.getItem("nfc_ok")==="1" && Date.now()-ts<NFC_TIMEOUT;
+/* ── NFC session helpers ─────────────────────────────────── */
+const NFC_KEY="us_nfc_unlock";
+function nfcSave(){
+  const r=JSON.stringify({ts:Date.now(),v:1});
+  try{localStorage.setItem(NFC_KEY,r);}catch(e){}
+  try{sessionStorage.setItem(NFC_KEY,r);}catch(e){}
 }
-function nfcTouch(){ sessionStorage.setItem("nfc_ts",Date.now()); }
+function nfcIsUnlocked(){
+  for(const s of[sessionStorage,localStorage]){
+    try{
+      const raw=s.getItem(NFC_KEY);
+      if(!raw)continue;
+      const rec=JSON.parse(raw);
+      if(rec.v&&Date.now()-rec.ts<NFC_TIMEOUT)return true;
+    }catch(e){}
+  }
+  return false;
+}
+function nfcValidateToken(token){
+  if(token===NFC_TOKEN){nfcSave();return true;}
+  return false;
+}
+function nfcTouch(){if(nfcIsUnlocked())nfcSave();}
 
 /* ── Shared-state hook ──────────────────────────────────── */
 const gs=(k,fb)=>{try{const v=localStorage.getItem(k);return v!=null?JSON.parse(v):fb;}catch{return fb;}};
@@ -137,7 +147,7 @@ Return ONLY a raw JSON array, no markdown fences, no explanation:
 
 isHalal: true=confirmed halal, false=confirmed not halal (alcohol/pork), null=unknown`;
 
-  const resp=await fetch("https://api.anthropic.com/v1/messages",{
+  const resp=await fetch("/.netlify/functions/ai",{
     method:"POST",
     headers:{"Content-Type":"application/json"},
     body:JSON.stringify({
@@ -178,6 +188,51 @@ const THEMES={
   sand:{name:"Sand",bg:"#FAF5ED",sf:"#fff",rose:"#EDE0CF",deep:"#E0D0B8",accent:"#A07840",ink:"#2A1F10"},
 };
 const NAV_IDS=["home","me","fridge","dates","map","gallery","notes","settings"];
+
+/* ── Birthdays ─────────────────────────────────────────────────────────── */
+const BIRTHDAYS=[
+  {name:"Areebah",day:15,month:7,year:2003,emoji:"🌸",
+   msg:"Today is Areebah's birthday. Uthmaan built this whole thing for her — today more than ever, he hopes it makes her feel exactly how loved she is. 💕"},
+  {name:"Uthmaan",day:14,month:6,year:2005,emoji:"💙",
+   msg:"It's Uthmaan's birthday today. He'd probably say something modest, but this app says it all. Show him some love. 🎂"},
+];
+
+/* ── App version for intro tracking ───────────────────────────────────── */
+const APP_VERSION="2.1";
+
+/* ── Intro slides ─────────────────────────────────────────────────────── */
+const INTRO_SLIDES=[
+  {emoji:"💕",title:"Hey Areebah.",
+   body:"Uthmaan built you something. Not because he had to — because he wanted you to have a place that's entirely yours. Hidden from the world, made for no one but the two of you.",
+   sub:"Welcome to us."},
+  {emoji:"⏱️",title:"He's been counting.",
+   body:"Every second since the day this started. Open the home screen and you'll see it — years, months, days, hours, minutes, and seconds. He built a timer because to him, not one of them goes unnoticed.",
+   tag:"Home"},
+  {emoji:"💭",title:"When words aren't enough.",
+   body:"Leave a mood emoji. Send a quick note. He sees it the moment you do — and when he's thinking of you, you'll see his. No big conversations needed. Just you two, always checking in.",
+   tag:"Mood"},
+  {emoji:"📋",title:"Little reminders.",
+   body:"Uthmaan leaves notes here. Some silly, some serious — all for you. Stick your own up too. Think of it as the fridge door of your relationship. Nothing important ever gets lost.",
+   tag:"Fridge"},
+  {emoji:"💝",title:"Date night, sorted.",
+   body:"Pick an idea, type the area, and the app finds real places nearby. It even checks if they're halal and tells you what it'll cost. Uthmaan thought of the details so neither of you has to.",
+   tag:"Dates"},
+  {emoji:"🗺️",title:"Every place, remembered.",
+   body:"Every restaurant you visit, every walk, every moment in a new city — pin it here. In ten years, you'll open this map and see your whole story written in places.",
+   tag:"Map"},
+  {emoji:"📸",title:"Private and yours.",
+   body:"Photos and videos, locked away in categories. No one else can see them — not even by accident. Your personal album, exactly as private as it should be.",
+   tag:"Gallery"},
+  {emoji:"🔒",title:"Even from him.",
+   body:"The Notes section is completely yours. Uthmaan cannot read them. Not even if he tried. This space is for whatever you feel, whenever you need to write it down. Just you.",
+   tag:"Private Notes"},
+  {emoji:"🎂",title:"The dates that matter most.",
+   body:"Birthdays are tracked and celebrated. On yours, the whole app throws a little party — because Uthmaan built in a reminder to celebrate you every single year.",
+   tag:"Birthdays"},
+  {emoji:"💕",title:"He made all of this. For you.",
+   body:"us. is Uthmaan's way of saying — I love you enough to build you a whole world. Fill it with memories, keep it close, and know that every single feature in here was thought of with you in mind.",
+   sub:"This is us."},
+];
 
 /* ── CSS ────────────────────────────────────────────────── */
 function buildCSS(theme,bgImg){
@@ -289,6 +344,23 @@ body{font-family:'Inter',-apple-system,sans-serif;color:var(--ink);-webkit-font-
 .ideas-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
 .idea-card{background:var(--sf);border-radius:14px;padding:14px 10px;text-align:center;cursor:pointer;box-shadow:var(--sh);transition:transform .12s}.idea-card:active{transform:scale(.95)}
 .conf-row{display:flex;gap:10px;margin-top:4px}
+  @keyframes confettiFall{0%{transform:translateY(-10px) rotate(0deg);opacity:1}100%{transform:translateY(110vh) rotate(800deg);opacity:0}}
+  @keyframes introIn{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+  @keyframes heartPulse{0%,100%{transform:scale(1)}40%{transform:scale(1.18)}}
+  .intro-screen{position:fixed;inset:0;background:var(--bg);z-index:75;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:clamp(28px,7vw,52px) 26px clamp(24px,6vw,40px);overflow:hidden}
+  .intro-slide{animation:introIn .38s cubic-bezier(.32,0,.16,1) forwards;display:flex;flex-direction:column;align-items:center;flex:1;justify-content:center;width:100%}
+  .intro-emoji{font-size:clamp(56px,14vw,76px);line-height:1;margin-bottom:clamp(18px,4vw,26px)}
+  .intro-title{font-family:'Cormorant Garamond',serif;font-size:clamp(26px,7.5vw,38px);font-weight:600;font-style:italic;color:var(--ink);margin-bottom:clamp(12px,3vw,18px);text-align:center;line-height:1.2}
+  .intro-body{font-size:clamp(13px,3.6vw,15px);color:var(--slate);text-align:center;line-height:1.85;max-width:310px}
+  .intro-sub{font-size:clamp(15px,4vw,18px);font-family:'Cormorant Garamond',serif;font-style:italic;color:var(--accent);margin-top:12px;text-align:center}
+  .intro-tag{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);opacity:.7;margin-top:10px;text-align:center}
+  .intro-dots{display:flex;gap:7px;justify-content:center;margin:clamp(14px,3.5vw,22px) 0;flex-shrink:0}
+  .intro-dot{width:7px;height:7px;border-radius:50%;background:var(--border);transition:.3s ease}
+  .intro-dot.on{background:var(--accent);width:22px;border-radius:50px}
+  .intro-btns{display:flex;gap:10px;width:100%;max-width:290px;flex-shrink:0}
+  .bday-card-today{background:linear-gradient(135deg,var(--deep) 0%,var(--rose) 100%);border-radius:var(--r);padding:18px;margin-bottom:10px;box-shadow:var(--sh);text-align:center;position:relative;overflow:hidden}
+  .bday-card-norm{background:var(--sf);border-radius:var(--r);padding:16px 18px;margin-bottom:10px;box-shadow:var(--sh)}
+  .bday-soon-badge{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);display:block;margin-top:2px}
 `;}
 
 /* ── Icons ──────────────────────────────────────────────── */
@@ -354,40 +426,125 @@ function EditTitle({value,onSave}){
 }
 
 /* ═══════════════════════════════════════════
-   NFC GATE
+   NFC GATE  — Web NFC on Android, URL fallback on iOS
 ═══════════════════════════════════════════ */
 function NFCGate({onPass}){
-  const[err,setErr]=useState(false);
+  const[mode,setMode]=useState("checking"); // checking | scanning | ios | error
+  const[tagErr,setTagErr]=useState("");
+
   useEffect(()=>{
-    // Check on load
-    if(nfcCheck()){onPass();return;}
-    // Check URL param (user might have navigated to the NFC URL)
+    // ── 1. Already unlocked within 12-hour window ──────────
+    if(nfcIsUnlocked()){onPass();return;}
+
+    // ── 2. URL token present (NFC tag opened a link, or iOS) ─
     const p=new URLSearchParams(window.location.search);
-    if(p.get("nfc")===NFC_TOKEN){onPass();return;}
-    setErr(true);
-    // Poll in case they navigate away and back with tag
-    const t=setInterval(()=>{if(nfcCheck())onPass();},1000);
-    return()=>clearInterval(t);
+    const token=p.get("nfc");
+    if(token){
+      window.history.replaceState({},"","/"); // wipe token from address bar
+      if(nfcValidateToken(token)){onPass();return;}
+      setTagErr("Invalid tag. Make sure you are using your us. tag.");
+    }
+
+    // ── 3. Web NFC API — Android Chrome only ──────────────
+    if("NDEFReader" in window){
+      setMode("scanning");
+      let ctrl=new AbortController();
+      (async()=>{
+        try{
+          const reader=new NDEFReader();
+          await reader.scan({signal:ctrl.signal});
+          reader.addEventListener("reading",({message})=>{
+            for(const record of message.records){
+              // Extract text from the record regardless of type
+              let text="";
+              try{
+                const bytes=new Uint8Array(record.data);
+                const full=new TextDecoder().decode(record.data);
+                const skip=new TextDecoder().decode(bytes.slice(1));
+                // URL records prefix the actual URL with a 1-byte scheme code
+                // Try both full and skip-first-byte to catch all encoding variants
+                text=full.includes(NFC_TOKEN)?full:skip;
+              }catch(e){}
+              if(text.includes(NFC_TOKEN)){
+                ctrl.abort();
+                nfcSave();
+                onPass();
+                return;
+              }
+            }
+            setTagErr("Wrong tag — use your us. tag.");
+            setTimeout(()=>setTagErr(""),3000);
+          });
+          reader.addEventListener("readingerror",()=>{
+            setTagErr("Could not read tag. Hold it still and try again.");
+            setTimeout(()=>setTagErr(""),3000);
+          });
+        }catch(e){
+          if(e.name!=="AbortError"){
+            // Permission denied or not supported
+            setMode("ios");
+          }
+        }
+      })();
+      return()=>ctrl.abort();
+    } else {
+      // iOS Safari — no Web NFC support
+      setMode("ios");
+    }
   },[]);
-  return(
+
+  const wrap=(icon,title,body,extra=null)=>(
     <div className="nfc-wrap">
-      <div style={{fontSize:"clamp(44px,12vw,60px)",marginBottom:18,animation:"hb 2s ease infinite"}}>📱</div>
-      <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(26px,7vw,32px)",fontWeight:600,color:"var(--ink)",marginBottom:8,textAlign:"center"}}>Scan to Open</h2>
-      <p style={{fontSize:14,color:"var(--muted)",textAlign:"center",lineHeight:1.7,maxWidth:280}}>
-        Hold your NFC tag to your phone to open <em>us.</em>
-        <br/><br/>
-        <span style={{fontSize:12}}>The app locks automatically after 30 seconds away.</span>
-      </p>
-      {err&&<p style={{marginTop:16,fontSize:12,color:"#e05050",textAlign:"center"}}>No valid tag detected.</p>}
+      <div style={{fontSize:"clamp(44px,12vw,56px)",marginBottom:16,animation:"hb 2s ease infinite"}}>{icon}</div>
+      <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(24px,6.5vw,30px)",fontWeight:600,color:"var(--ink)",marginBottom:10,textAlign:"center"}}>{title}</h2>
+      <p style={{fontSize:14,color:"var(--muted)",textAlign:"center",lineHeight:1.75,maxWidth:280}}>{body}</p>
+      {extra}
+      {tagErr&&<p style={{marginTop:14,fontSize:13,color:"#e05050",textAlign:"center",maxWidth:260}}>{tagErr}</p>}
     </div>
   );
+
+  const[introToggle,setIntroToggle]=useState(()=>gs('show_intro_on_scan',false));
+  const toggleIntro=v=>{setIntroToggle(v);ss('show_intro_on_scan',v);};
+
+  const toggleEl=(
+    <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',marginTop:22,userSelect:'none'}}>
+      <div onClick={()=>toggleIntro(!introToggle)} style={{width:38,height:22,background:introToggle?'var(--accent)':'var(--border)',borderRadius:50,position:'relative',transition:'.2s',flexShrink:0}}>
+        <div style={{position:'absolute',top:3,left:introToggle?17:3,width:16,height:16,background:'#fff',borderRadius:'50%',transition:'.2s',boxShadow:'0 1px 4px rgba(0,0,0,.2)'}}/>
+      </div>
+      <span style={{fontSize:12,color:'var(--muted)',fontWeight:500}}>Show welcome on unlock</span>
+    </label>
+  );
+
+  if(mode==="scanning") return wrap(
+    "📱",
+    "Hold tag to unlock",
+    "Bring your NFC tag to the back of your phone. No links will open — the app unlocks directly.",
+    toggleEl
+  );
+
+  if(mode==="ios") return wrap(
+    "🔒",
+    "us.",
+    <>
+      Scan your NFC tag with your camera or NFC app.
+      <br/><br/>
+      It will open a link — tap <strong>Open</strong> and you will be let in automatically. The session then stays unlocked for <strong>12 hours</strong>.
+    </>,
+    toggleEl
+  );
+
+  // Checking state (brief flash)
+  return wrap("💕","us.","One moment…");
 }
 
 /* ═══════════════════════════════════════════
    AUTH SCREEN
 ═══════════════════════════════════════════ */
-function AuthScreen({onAuth}){
-  const[mode,setMode]=useState("signin"); // signin | signup
+function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
+  const[fbKey,setFbKey]=useState(initFbKey||"");
+  const[fbUrl,setFbUrl]=useState(initFbUrl||"");
+  const[fbReady,setFbReady]=useState(!!(initFbKey&&initFbUrl));
+  const[mode,setMode]=useState("signin");
   const[email,setEmail]=useState("");
   const[pw,setPw]=useState("");
   const[err,setErr]=useState("");
@@ -395,15 +552,38 @@ function AuthScreen({onAuth}){
   const[regCount,setRegCount]=useState(null);
 
   useEffect(()=>{
-    // Check how many accounts registered
-    dbGet("meta/registered_count").then(v=>setRegCount(v||0));
-  },[]);
+    if(fbReady) dbGet("meta/registered_count").then(v=>setRegCount(v||0));
+  },[fbReady]);
 
+  const saveFirebase=()=>{
+    if(!fbKey.trim()||!fbUrl.trim()){setErr("Both fields are required.");return;}
+    FIREBASE_API_KEY=fbKey.trim();
+    FIREBASE_DB_URL=fbUrl.trim();
+    onFbSave(fbKey.trim(),fbUrl.trim());
+    setFbReady(true);
+    setErr("");
+  };
+
+  // ── Step 1: Firebase not set up yet ─────────────────────
+  if(!fbReady) return(
+    <div className="auth-wrap">
+      <div className="auth-heart">⚙️</div>
+      <h1 className="auth-title" style={{fontSize:"clamp(24px,7vw,34px)"}}>One-time setup</h1>
+      <p className="auth-sub">Paste your two Firebase details below.<br/>You only do this once.</p>
+      <input className={`auth-field${err?" err":""}`} placeholder="Firebase API Key  (starts with AIzaSy…)" value={fbKey} onChange={e=>setFbKey(e.target.value)}/>
+      <input className={`auth-field${err?" err":""}`} placeholder="Database URL  (ends with .firebasedatabase.app)" value={fbUrl} onChange={e=>setFbUrl(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveFirebase()}/>
+      {err&&<p style={{color:"#e05050",fontSize:13,marginBottom:10,textAlign:"center"}}>{err}</p>}
+      <button className="btn-p" onClick={saveFirebase}>Continue →</button>
+      <p className="cap" style={{textAlign:"center",marginTop:14,lineHeight:1.7}}>
+        Firebase Console → Project Settings<br/>→ Your apps → web icon → copy apiKey and databaseURL
+      </p>
+    </div>
+  );
+
+  // ── Step 2: Normal login ────────────────────────────────
   const showReg=regCount!==null&&regCount<MAX_USERS;
-
   const submit=async()=>{
     if(!email||!pw){setErr("Please fill in both fields.");return;}
-    if(!FIREBASE_API_KEY){setErr("Firebase not configured — add your API key in Settings first.");return;}
     setBusy(true);setErr("");
     try{
       const d=mode==="signup"?await fbSignUp(email,pw):await fbSignIn(email,pw);
@@ -429,7 +609,7 @@ function AuthScreen({onAuth}){
       {showReg&&<button className="btn-g" onClick={()=>{setMode(m=>m==="signin"?"signup":"signin");setErr("");}}>
         {mode==="signin"?"First time? Register →":"Already registered? Sign in"}
       </button>}
-      {!showReg&&regCount>=MAX_USERS&&mode==="signup"&&<p className="cap" style={{textAlign:"center",marginTop:8}}>Registration is closed — both accounts already exist.</p>}
+      {!showReg&&regCount>=MAX_USERS&&mode==="signup"&&<p className="cap" style={{textAlign:"center",marginTop:8}}>Registration is closed — both accounts exist.</p>}
     </div>
   );
 }
@@ -562,6 +742,7 @@ function HomePage({myName,theirName,startDate,nav,moodEmojis,setMoodEmojis,connE
   return(
     <div className="us-page pf">
       <CounterCard startDate={startDate}/>
+      <BirthdayCard/>
       <MoodCard moodEmojis={moodEmojis} onEditEmojis={()=>{setEmojiDraft((moodEmojis||DEF_MOODS).join(" "));setEditEmojis(true);}}/>
       <DistanceCard/>
       <ProfileCircles myName={myName} theirName={theirName} connEmoji={connEmoji} onMeClick={()=>nav("me")} onEditEmoji={()=>{setConnDraft(connEmoji||"💕");setEditConn(true);}}/>
@@ -1022,7 +1203,7 @@ function NotesPage({pageName,setPageName}){
 /* ═══════════════════════════════════════════
    SETTINGS PAGE
 ═══════════════════════════════════════════ */
-function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,names,setNames,myName,theirName,startDate,onSettings,fbApiKey,setFbApiKey,fbDbUrl,setFbDbUrl,synced}){
+function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,names,setNames,myName,theirName,startDate,onSettings,fbApiKey,setFbApiKey,fbDbUrl,setFbDbUrl,synced,onReplayIntro}){
   const[apiDraft,setApiDraft]=useState(fbApiKey||"");
   const[dbDraft,setDbDraft]=useState(fbDbUrl||"");
   const[bgDraft,setBgDraft]=useState(bgImage||"");
@@ -1058,12 +1239,194 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
       </div>
 
       <div className="card">
+        <h3 className="card-title" style={{marginBottom:12}}>Welcome Screen</h3>
+        <p className="cap" style={{marginBottom:14,lineHeight:1.7}}>
+          Replay the welcome walkthrough that plays when you first scan your NFC tag. Great to revisit, or show Areebah how much thought went into every section.
+        </p>
+        <button className="btn-p" onClick={onReplayIntro}>
+          💕 Replay Welcome Intro
+        </button>
+      </div>
+
+      <div className="card">
         <h3 className="card-title" style={{marginBottom:4}}>Storage Info</h3>
         <p className="cap" style={{lineHeight:1.8}}>
           Photos are compressed to ~100KB each before upload. Firebase free tier gives 1GB database storage (~10,000 photos).<br/><br/>
           Videos are stored <strong>locally on-device only</strong> (marked "LOCAL"). To share videos between phones, upgrade to Firebase Storage (5GB free) or use a shared Google Drive link.<br/><br/>
           To increase limits: upgrade to Firebase Blaze plan (~£0.025/GB/month).
         </p>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   CONFETTI
+═══════════════════════════════════════════ */
+function Confetti(){
+  const pieces=Array.from({length:48},(_,i)=>({
+    id:i,
+    left:Math.random()*100,
+    delay:Math.random()*2.5,
+    dur:2.2+Math.random()*2,
+    color:['#C45450','#F3DDD5','#FFD700','#FF85A1','#85D1FF','#A8F0A8','#E8A8F0','#F0D8A8'][Math.floor(Math.random()*8)],
+    size:5+Math.random()*7,
+    round:Math.random()>0.5,
+  }));
+  return(
+    <div style={{position:'fixed',inset:0,pointerEvents:'none',overflow:'hidden',zIndex:200}}>
+      {pieces.map(p=>(
+        <div key={p.id} style={{
+          position:'absolute',left:`${p.left}%`,top:-20,
+          width:p.size,height:p.size,
+          background:p.color,
+          borderRadius:p.round?'50%':'3px',
+          animation:`confettiFall ${p.dur}s ${p.delay}s linear infinite`,
+        }}/>
+      ))}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   BIRTHDAY CARD
+═══════════════════════════════════════════ */
+function BirthdayCard(){
+  function daysUntil(day,month){
+    const now=new Date();
+    let next=new Date(now.getFullYear(),month-1,day);
+    if(next<=now)next.setFullYear(now.getFullYear()+1);
+    return Math.ceil((next-now)/86400000);
+  }
+  function isToday(day,month){
+    const n=new Date();
+    return n.getDate()===day&&n.getMonth()+1===month;
+  }
+  function getAge(day,month,year){
+    const n=new Date();
+    let age=n.getFullYear()-year;
+    if(n.getMonth()+1<month||(n.getMonth()+1===month&&n.getDate()<day))age--;
+    return age;
+  }
+
+  const todayBday=BIRTHDAYS.find(b=>isToday(b.day,b.month));
+  const [showConf,setShowConf]=useState(!!todayBday);
+  useEffect(()=>{
+    if(!showConf)return;
+    const t=setTimeout(()=>setShowConf(false),8000);
+    return()=>clearTimeout(t);
+  },[showConf]);
+
+  if(todayBday) return(
+    <>
+      {showConf&&<Confetti/>}
+      <div className="bday-card-today">
+        <div style={{fontSize:'clamp(36px,9vw,48px)',marginBottom:10,animation:'heartPulse 1.2s ease infinite'}}>{todayBday.emoji} 🎂 {todayBday.emoji}</div>
+        <h3 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:'clamp(20px,5.5vw,26px)',fontWeight:600,color:'var(--ink)',marginBottom:8}}>
+          Happy Birthday {todayBday.name}! 🎉
+        </h3>
+        <p style={{fontSize:13,color:'var(--slate)',lineHeight:1.7,maxWidth:280,margin:'0 auto 10px'}}>
+          {todayBday.msg}
+        </p>
+        <p style={{fontSize:11,color:'var(--muted)'}}>
+          Turning {getAge(todayBday.day,todayBday.month,todayBday.year)} today 🌟
+        </p>
+        <button style={{marginTop:12,background:'none',border:'none',cursor:'pointer',fontSize:12,color:'var(--accent)',fontWeight:600}} onClick={()=>setShowConf(true)}>
+          🎊 Celebrate again
+        </button>
+      </div>
+    </>
+  );
+
+  return(
+    <div className="bday-card-norm">
+      <h3 className="card-title" style={{marginBottom:12}}>🎂 Birthdays</h3>
+      {BIRTHDAYS.map((b,i)=>{
+        const days=daysUntil(b.day,b.month);
+        const soon=days<=7;
+        const age=getAge(b.day,b.month,b.year);
+        return(
+          <div key={b.name} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:i<BIRTHDAYS.length-1?'1px solid var(--border)':'none'}}>
+            <div>
+              <span style={{fontSize:18,marginRight:8}}>{b.emoji}</span>
+              <span style={{fontWeight:600,fontSize:14,color:'var(--ink)'}}>{b.name}</span>
+              <span style={{fontSize:11,color:'var(--muted)',marginLeft:6,display:'inline-block'}}>{b.day}/{b.month}/{b.year}</span>
+              {soon&&<span className="bday-soon-badge">coming soon ✨</span>}
+            </div>
+            <div style={{textAlign:'right',flexShrink:0}}>
+              <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:'clamp(18px,5vw,22px)',fontWeight:700,color:soon?'var(--accent)':'var(--ink)'}}>{days}</span>
+              <span style={{fontSize:11,color:'var(--muted)',marginLeft:3}}>days</span>
+              <div style={{fontSize:10,color:'var(--muted)'}}>turns {age+1}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   INTRO SCREEN  — first-time welcome walkthrough
+═══════════════════════════════════════════ */
+function IntroScreen({onDone}){
+  const [idx,setIdx]=useState(0);
+  const [key,setKey]=useState(0); // force re-animation on slide change
+
+  // Check if there's a "what's new" slide to prepend
+  const seenVersion=gs('us_intro_version','');
+  const isUpdate=seenVersion&&seenVersion!==APP_VERSION;
+
+  const whatNewSlide=isUpdate?[{
+    emoji:'✨',
+    title:'Something new.',
+    body:`us. has been updated to version ${APP_VERSION}. Here's what Uthmaan added:
+
+• Birthday tracker with confetti celebrations
+• Welcome walkthrough (this one!)
+• Replay intro anytime from Settings
+• Confetti on birthdays
+• NFC unlocks the app directly on Android`,
+    sub:'Tap Next to see the full tour →',
+    isUpdate:true,
+  }]:[];
+
+  const slides=[...whatNewSlide,...INTRO_SLIDES];
+  const slide=slides[idx];
+  const isLast=idx===slides.length-1;
+
+  const next=()=>{
+    if(isLast){ss('us_intro_version',APP_VERSION);onDone();return;}
+    setIdx(i=>i+1);setKey(k=>k+1);
+  };
+  const skip=()=>{ss('us_intro_version',APP_VERSION);onDone();};
+
+  return(
+    <div className="intro-screen">
+      {/* Skip */}
+      <div style={{width:'100%',display:'flex',justifyContent:'flex-end',flexShrink:0}}>
+        {!isLast&&<button onClick={skip} style={{background:'none',border:'none',cursor:'pointer',fontSize:12,fontWeight:600,color:'var(--muted)',letterSpacing:'.06em'}}>SKIP</button>}
+      </div>
+
+      {/* Slide */}
+      <div className="intro-slide" key={key}>
+        <div className="intro-emoji">{slide.emoji}</div>
+        <h2 className="intro-title">{slide.title}</h2>
+        <p className="intro-body" style={{whiteSpace:'pre-line'}}>{slide.body}</p>
+        {slide.sub&&<p className="intro-sub">{slide.sub}</p>}
+        {slide.tag&&<p className="intro-tag">{slide.tag}</p>}
+      </div>
+
+      {/* Progress dots */}
+      <div className="intro-dots">
+        {slides.map((_,i)=><div key={i} className={`intro-dot${i===idx?' on':''}`}/>)}
+      </div>
+
+      {/* Buttons */}
+      <div className="intro-btns">
+        {idx>0&&<button className="btn-p" style={{background:'var(--rose)',color:'var(--ink)',flex:1}} onClick={()=>{setIdx(i=>i-1);setKey(k=>k+1);}}>← Back</button>}
+        <button className="btn-p" style={{flex:2}} onClick={next}>
+          {isLast?'Let's go 💕':'Next →'}
+        </button>
       </div>
     </div>
   );
@@ -1089,6 +1452,7 @@ function BottomNav({page,nav,names}){
 export default function App(){
   // NFC gate
   const[nfcOk,setNfcOk]=useState(false);
+  const[showIntro,setShowIntro]=useState(false);
   // Auth gate
   const[user,setUser]=useState(()=>{ const u=gs("auth_user",null); return u&&(Date.now()-u.ts<7*86400000)?u:null; });
   // App state
@@ -1130,11 +1494,34 @@ export default function App(){
   const isHome=page==="home";
 
   // ── Gates ──────────────────────────────────
-  if(!nfcOk)return(<div className="us-app"><style>{buildCSS(theme,bgImage)}</style><NFCGate onPass={()=>setNfcOk(true)}/></div>);
-  if(!user)return(<div className="us-app"><style>{buildCSS(theme,bgImage)}</style><AuthScreen onAuth={onAuth}/></div>);
+  const handleNfcPass=()=>{
+    setNfcOk(true);
+    const seenVersion=gs('us_intro_version','');
+    const isFirstTime=!seenVersion;
+    const wantsIntro=gs('show_intro_on_scan',false);
+    const isUpdate=seenVersion&&seenVersion!==APP_VERSION;
+    // Show intro if: first time ever, or user toggled it on, or there's a new version
+    if(isFirstTime||wantsIntro||isUpdate) setShowIntro(true);
+  };
+  if(!nfcOk)return(<div className="us-app"><style>{buildCSS(theme,bgImage)}</style><NFCGate onPass={handleNfcPass}/></div>);
+  if(!user)return(<div className="us-app"><style>{buildCSS(theme,bgImage)}</style><AuthScreen
+    onAuth={onAuth}
+    initFbKey={fbApiKey}
+    initFbUrl={fbDbUrl}
+    onFbSave={(key,url)=>{
+      FIREBASE_API_KEY=key;
+      FIREBASE_DB_URL=url;
+      setFbApiKey(key);
+      setFbDbUrl(url);
+      ss("fb_api_key",key);
+      ss("fb_db_url",url);
+      setSynced(true);
+    }}
+  /></div>);
 
   return(
     <div className="us-app">
+      {showIntro&&<IntroScreen onDone={()=>setShowIntro(false)}/>}
       <header className="us-hdr">
         {isHome
           ?<><div className="logo">us.</div><div style={{display:"flex",alignItems:"center",gap:8}}>{synced&&<span style={{fontSize:9,fontWeight:700,color:"var(--muted)",display:"flex",alignItems:"center"}}><span className="sync-dot on"/>LIVE</span>}<button style={{background:"none",border:"none",cursor:"pointer",fontSize:10,fontWeight:700,letterSpacing:".12em",textTransform:"uppercase",color:"var(--slate)"}} onClick={()=>setPage("gallery")}>GALLERY</button></div></>
@@ -1147,7 +1534,7 @@ export default function App(){
       {page==="map"&&<MapPage pageName={names.map||DEF_NAMES.map} setPageName={makeNameSetter("map")}/>}
       {page==="gallery"&&<GalleryPage pageName={names.gallery||DEF_NAMES.gallery} setPageName={makeNameSetter("gallery")} myName={myName}/>}
       {page==="notes"&&<NotesPage pageName={names.notes||DEF_NAMES.notes} setPageName={makeNameSetter("notes")}/>}
-      {page==="settings"&&<SettingsPage pageName={names.settings||DEF_NAMES.settings} setPageName={makeNameSetter("settings")} theme={theme} setTheme={setTheme} bgImage={bgImage} setBgImage={setBgImage} names={names} setNames={setNames} myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} fbApiKey={fbApiKey} setFbApiKey={setFbApiKey} fbDbUrl={fbDbUrl} setFbDbUrl={setFbDbUrl} synced={synced}/>}
+      {page==="settings"&&<SettingsPage pageName={names.settings||DEF_NAMES.settings} setPageName={makeNameSetter("settings")} theme={theme} setTheme={setTheme} bgImage={bgImage} setBgImage={setBgImage} names={names} setNames={setNames} myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} fbApiKey={fbApiKey} setFbApiKey={setFbApiKey} fbDbUrl={fbDbUrl} setFbDbUrl={setFbDbUrl} synced={synced} onReplayIntro={()=>setShowIntro(true)}/>}
       <BottomNav page={page} nav={setPage} names={names}/>
     </div>
   );

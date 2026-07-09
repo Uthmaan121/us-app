@@ -1425,7 +1425,7 @@ function IntroScreen({onDone}){
       <div className="intro-btns">
         {idx>0&&<button className="btn-p" style={{background:'var(--rose)',color:'var(--ink)',flex:1}} onClick={()=>{setIdx(i=>i-1);setKey(k=>k+1);}}>← Back</button>}
         <button className="btn-p" style={{flex:2}} onClick={next}>
-          {isLast?"Let\'s go 💕":'Next →"}
+          {isLast?"Let\'s go 💕":"Next →"}
         </button>
       </div>
     </div>

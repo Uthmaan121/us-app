@@ -36,7 +36,7 @@ async function fbSignUp(email, password){
   });
   const d = await r.json();
   if(d.error){
-    if(d.error.message==="EMAIL_EXISTS") throw new Error("Already registered — please sign in.");
+    if(d.error.message==="EMAIL_EXISTS") throw new Error("This email is already registered — tap \"Already registered? Sign in\" below.");
     throw new Error(prettifyAuthErr(d.error.message));
   }
   return d;
@@ -594,7 +594,6 @@ function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
   );
 
   // ── Step 2: Normal login ────────────────────────────────
-  const showReg=regCount!==null&&regCount<MAX_USERS;
   const[resetMode,setResetMode]=useState(false);
   const[resetEmail,setResetEmail]=useState(email||"");
   const[resetSent,setResetSent]=useState(false);
@@ -632,18 +631,34 @@ function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
       <div className="auth-heart">🔑</div>
       <h1 className="auth-title" style={{fontSize:"clamp(24px,7vw,32px)"}}>Reset Password</h1>
       {resetSent
-        ? <>
-            <p className="auth-sub" style={{color:"var(--ink)",lineHeight:1.8}}>
-              ✅ Email sent to<br/>
-              <strong>{resetEmail}</strong><br/><br/>
-              Open that email and tap the reset link. Then come back here and sign in with your new password.
-            </p>
-            <button className="btn-p" style={{marginTop:8}} onClick={()=>{setResetMode(false);setResetSent(false);setErr("");}}>
+        ? <div style={{width:"100%"}}>
+            <div style={{background:"#e8f5e9",borderRadius:14,padding:"16px 18px",marginBottom:16,textAlign:"center"}}>
+              <p style={{fontSize:15,fontWeight:600,color:"#2e7d32",marginBottom:6}}>✅ Reset email sent!</p>
+              <p style={{fontSize:13,color:"#388e3c",lineHeight:1.7}}>
+                Sent to <strong>{resetEmail}</strong>
+              </p>
+            </div>
+            <div style={{background:"#fff8e1",borderRadius:14,padding:"14px 16px",marginBottom:16}}>
+              <p style={{fontSize:12,color:"#f57f17",fontWeight:700,marginBottom:6,letterSpacing:".05em",textTransform:"uppercase"}}>If the email hasn't arrived:</p>
+              <ul style={{fontSize:13,color:"#795548",lineHeight:2,paddingLeft:16}}>
+                <li>Check your <strong>Spam</strong> folder</li>
+                <li>Check <strong>Promotions</strong> tab (Gmail)</li>
+                <li>Search for <em>noreply@</em> or <em>firebase</em></li>
+                <li>Wait 2–3 minutes — it can be slow</li>
+                <li>Tap <strong>Resend</strong> below if still nothing</li>
+              </ul>
+            </div>
+            <button className="btn-p" style={{marginBottom:10}} onClick={()=>{setResetMode(false);setResetSent(false);setErr("");}}>
               Back to Sign In
             </button>
-          </>
-        : <>
-            <p className="auth-sub">Enter your email and we'll send you a link to reset your password.</p>
+            <button className="btn-g" onClick={()=>{setResetSent(false);setErr("");sendReset();}}>
+              Resend email
+            </button>
+          </div>
+        : <div style={{width:"100%"}}>
+            <p className="auth-sub" style={{marginBottom:20}}>
+              Enter your email and we'll send a reset link straight to your inbox.
+            </p>
             <input
               className={`auth-field${err?" err":""}`}
               type="email"
@@ -660,7 +675,7 @@ function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
             <button className="btn-g" onClick={()=>{setResetMode(false);setErr("");}}>
               ← Back to Sign In
             </button>
-          </>
+          </div>
       }
     </div>
   );
@@ -681,10 +696,9 @@ function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
       {mode==="signin"&&<button className="btn-g" style={{marginBottom:6}} onClick={()=>{setResetMode(true);setErr("");}}>
         Forgot password?
       </button>}
-      {showReg&&<button className="btn-g" onClick={()=>{setMode(m=>m==="signin"?"signup":"signin");setErr("");}}>
+      <button className="btn-g" onClick={()=>{setMode(m=>m==="signin"?"signup":"signin");setErr("");}}>
         {mode==="signin"?"First time? Register →":"Already registered? Sign in"}
-      </button>}
-      {!showReg&&regCount>=MAX_USERS&&mode==="signup"&&<p className="cap" style={{textAlign:"center",marginTop:8}}>Registration is closed — both accounts exist.</p>}
+      </button>
     </div>
   );
 }

@@ -41,11 +41,24 @@ async function fbSignUp(email, password){
   }
   return d;
 }
+async function fbResetPassword(email){
+  const r=await fetch(authUrl("sendOobCode"),{
+    method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({requestType:"PASSWORD_RESET",email})
+  });
+  const d=await r.json();
+  if(d.error)throw new Error(prettifyAuthErr(d.error.message));
+  return true;
+}
 function prettifyAuthErr(msg){
-  const map={EMAIL_NOT_FOUND:"Email not found.",INVALID_PASSWORD:"Incorrect password.",
+  const map={
+    EMAIL_NOT_FOUND:"No account found with that email.",
+    INVALID_PASSWORD:"Incorrect password.",
     TOO_MANY_ATTEMPTS_TRY_LATER:"Too many attempts. Try again later.",
     WEAK_PASSWORD:"Password must be at least 6 characters.",
-    INVALID_EMAIL:"Invalid email address."};
+    INVALID_EMAIL:"Invalid email address.",
+    USER_NOT_FOUND:"No account found with that email.",
+  };
   return map[msg]||msg;
 }
 
@@ -582,6 +595,11 @@ function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
 
   // ── Step 2: Normal login ────────────────────────────────
   const showReg=regCount!==null&&regCount<MAX_USERS;
+  const[resetMode,setResetMode]=useState(false);
+  const[resetEmail,setResetEmail]=useState(email||"");
+  const[resetSent,setResetSent]=useState(false);
+  const[resetBusy,setResetBusy]=useState(false);
+
   const submit=async()=>{
     if(!email||!pw){setErr("Please fill in both fields.");return;}
     setBusy(true);setErr("");
@@ -597,15 +615,72 @@ function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
     setBusy(false);
   };
 
+  const sendReset=async()=>{
+    if(!resetEmail.trim()){setErr("Enter your email address above first.");return;}
+    if(!ALLOWED_EMAILS.includes(resetEmail.trim().toLowerCase())){setErr("That email isn't linked to this app.");return;}
+    setResetBusy(true);setErr("");
+    try{
+      await fbResetPassword(resetEmail.trim());
+      setResetSent(true);
+    }catch(e){setErr(e.message);}
+    setResetBusy(false);
+  };
+
+  // ── Forgot password view ──────────────────────────────
+  if(resetMode) return(
+    <div className="auth-wrap">
+      <div className="auth-heart">🔑</div>
+      <h1 className="auth-title" style={{fontSize:"clamp(24px,7vw,32px)"}}>Reset Password</h1>
+      {resetSent
+        ? <>
+            <p className="auth-sub" style={{color:"var(--ink)",lineHeight:1.8}}>
+              ✅ Email sent to<br/>
+              <strong>{resetEmail}</strong><br/><br/>
+              Open that email and tap the reset link. Then come back here and sign in with your new password.
+            </p>
+            <button className="btn-p" style={{marginTop:8}} onClick={()=>{setResetMode(false);setResetSent(false);setErr("");}}>
+              Back to Sign In
+            </button>
+          </>
+        : <>
+            <p className="auth-sub">Enter your email and we'll send you a link to reset your password.</p>
+            <input
+              className={`auth-field${err?" err":""}`}
+              type="email"
+              placeholder="Your email address"
+              value={resetEmail}
+              onChange={e=>setResetEmail(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&sendReset()}
+              autoFocus
+            />
+            {err&&<p style={{color:"#e05050",fontSize:13,marginBottom:10,textAlign:"center"}}>{err}</p>}
+            <button className="btn-p" style={{marginBottom:12}} onClick={sendReset} disabled={resetBusy}>
+              {resetBusy?"Sending…":"Send Reset Email"}
+            </button>
+            <button className="btn-g" onClick={()=>{setResetMode(false);setErr("");}}>
+              ← Back to Sign In
+            </button>
+          </>
+      }
+    </div>
+  );
+
+  // ── Normal sign in / register view ───────────────────
   return(
     <div className="auth-wrap">
       <div className="auth-heart">💕</div>
       <h1 className="auth-title">us.</h1>
       <p className="auth-sub">{mode==="signup"?"Create your account":"Welcome back"}</p>
-      <input className={`auth-field${err?" err":""}`} type="email" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="email"/>
-      <input className={`auth-field${err?" err":""}`} type="password" placeholder="Password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()}/>
+      <input className={`auth-field${err?" err":""}`} type="email" placeholder="Email" value={email} onChange={e=>{setEmail(e.target.value);setResetEmail(e.target.value);}} autoComplete="email"/>
+      {mode==="signin"&&<input className={`auth-field${err?" err":""}`} type="password" placeholder="Password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()}/>}
+      {mode==="signup"&&<input className={`auth-field${err?" err":""}`} type="password" placeholder="Choose a password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()}/>}
       {err&&<p style={{color:"#e05050",fontSize:13,marginBottom:10,textAlign:"center"}}>{err}</p>}
-      <button className="btn-p" style={{marginBottom:14}} onClick={submit} disabled={busy}>{busy?"…":mode==="signup"?"Create Account":"Sign In"}</button>
+      <button className="btn-p" style={{marginBottom:10}} onClick={submit} disabled={busy}>
+        {busy?"…":mode==="signup"?"Create Account":"Sign In"}
+      </button>
+      {mode==="signin"&&<button className="btn-g" style={{marginBottom:6}} onClick={()=>{setResetMode(true);setErr("");}}>
+        Forgot password?
+      </button>}
       {showReg&&<button className="btn-g" onClick={()=>{setMode(m=>m==="signin"?"signup":"signin");setErr("");}}>
         {mode==="signin"?"First time? Register →":"Already registered? Sign in"}
       </button>}
@@ -1425,7 +1500,7 @@ function IntroScreen({onDone}){
       <div className="intro-btns">
         {idx>0&&<button className="btn-p" style={{background:'var(--rose)',color:'var(--ink)',flex:1}} onClick={()=>{setIdx(i=>i-1);setKey(k=>k+1);}}>← Back</button>}
         <button className="btn-p" style={{flex:2}} onClick={next}>
-          {isLast?"Let\'s go 💕":"Next →"}
+          {isLast?"Let's go 💕":"Next →"}
         </button>
       </div>
     </div>

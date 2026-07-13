@@ -5,7 +5,6 @@ import { useState, useEffect, useRef, useCallback } from "react";
    CONFIG  — fill in your Firebase details
 ════════════════════════════════════════════ */
 const NFC_TOKEN     = "8f4a2b7c1d3e9f5a6b8c0d4e1f2a3b5c"; // ← write this onto your NFC tag
-const NFC_TIMEOUT   = 12 * 60 * 60 * 1000;               // 12 hours
 const ALLOWED_EMAILS= ["hyphen080@gmail.com","malikareebah157@gmail.com"];
 const MAX_USERS     = 2;
 const DEF_START     = "2026-04-14";
@@ -76,29 +75,10 @@ function dbListen(path,cb){
   }catch{return()=>{};}
 }
 
-/* ── NFC session helpers ─────────────────────────────────── */
-const NFC_KEY="us_nfc_unlock";
-function nfcSave(){
-  const r=JSON.stringify({ts:Date.now(),v:1});
-  try{localStorage.setItem(NFC_KEY,r);}catch(e){}
-  try{sessionStorage.setItem(NFC_KEY,r);}catch(e){}
-}
-function nfcIsUnlocked(){
-  for(const s of[sessionStorage,localStorage]){
-    try{
-      const raw=s.getItem(NFC_KEY);
-      if(!raw)continue;
-      const rec=JSON.parse(raw);
-      if(rec.v&&Date.now()-rec.ts<NFC_TIMEOUT)return true;
-    }catch(e){}
-  }
-  return false;
-}
-function nfcValidateToken(token){
-  if(token===NFC_TOKEN){nfcSave();return true;}
-  return false;
-}
-function nfcTouch(){if(nfcIsUnlocked())nfcSave();}
+/* ── NFC helpers — no persistence, clears on every refresh ── */
+// nfcOk lives only in React state. Closing/refreshing always requires re-scan.
+function nfcValidateToken(token){ return token===NFC_TOKEN; }
+function nfcTouch(){} // no-op — intentional
 
 /* ── Shared-state hook ──────────────────────────────────── */
 const gs=(k,fb)=>{try{const v=localStorage.getItem(k);return v!=null?JSON.parse(v):fb;}catch{return fb;}};
@@ -145,37 +125,54 @@ async function compressImg(file,maxPx=1080,q=0.65){
 }
 
 /* ── AI place research (Anthropic API) ──────────────────── */
+function extractJsonArray(text){
+  const clean=text.replace(/```[a-z]*\n?/gi,"").replace(/```/g,"").trim();
+  const start=clean.indexOf("[");
+  if(start===-1)return null;
+  let depth=0,inStr=false,esc=false;
+  for(let i=start;i<clean.length;i++){
+    const ch=clean[i];
+    if(esc){esc=false;continue;}
+    if(ch==="\\"&&inStr){esc=true;continue;}
+    if(ch==='"'){inStr=!inStr;continue;}
+    if(inStr)continue;
+    if(ch==="["||ch==="{")depth++;
+    else if(ch==="]"||ch==="}"){depth--;if(depth===0&&ch==="]")return clean.slice(start,i+1);}
+  }
+  return null;
+}
+
 async function researchPlaces(dateType,location){
-  const prompt=`Find 4 real places for a "${dateType}" date near ${location}, UK (or wherever it is globally).
+  const prompt=`You are helping plan a date. Search the web and find 4 REAL specific venues for a "${dateType}" date in or near "${location}".
 
-For EACH place, search for:
-1. Their actual name and address
-2. Google/TripAdvisor/Yelp rating
-3. HALAL STATUS — search their website, Google listing, menu, and reviews. Quote the EXACT text you find that mentions halal, pork, or alcohol. If nothing found, say so.
-4. Rough cost: per person and for 2 people (use menu prices or typical prices for this type)
-5. One-line description
+Search for each venue. For each one find its real name, full address, star rating, halal status (search website + Google listing + reviews — quote EXACT text found), cost per person, cost for 2 people, and a one-line description.
 
-Return ONLY a raw JSON array, no markdown fences, no explanation:
-[{"name":"","address":"","rating":4.2,"isHalal":true,"halalSource":"Google listing","halalQuote":"Exact quote here","costOne":"£12-18","costTwo":"£24-36","description":"Brief description","website":""}]
+After searching, respond with ONLY a valid JSON array — nothing before or after it, no markdown, no explanation. Start with [ and end with ].
 
-isHalal: true=confirmed halal, false=confirmed not halal (alcohol/pork), null=unknown`;
+[{"name":"Exact name","address":"Full address","rating":4.3,"isHalal":true,"halalSource":"Where found","halalQuote":"Exact text from listing","costOne":"£15-20","costTwo":"£30-40","description":"One sentence","website":"https://..."}]
+
+isHalal: true=confirmed halal, false=confirmed NOT halal (alcohol/pork on premises), null=unknown after searching`;
 
   const resp=await fetch("/.netlify/functions/ai",{
     method:"POST",
     headers:{"Content-Type":"application/json"},
     body:JSON.stringify({
       model:"claude-sonnet-4-6",
-      max_tokens:2000,
+      max_tokens:3000,
       tools:[{"type":"web_search_20250305","name":"web_search"}],
       messages:[{role:"user",content:prompt}]
     })
   });
+  if(!resp.ok){
+    const e=await resp.json().catch(()=>({}));
+    throw new Error(e.error||"Server error "+resp.status+". Check ANTHROPIC_API_KEY is set in Netlify env vars.");
+  }
   const data=await resp.json();
-  const text=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
-  try{
-    const match=text.match(/\[[\s\S]*?\]/);
-    return match?JSON.parse(match[0]):[];
-  }catch{ return[]; }
+  if(data.error)throw new Error(data.error.message||"API error");
+  const text=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
+  const jsonStr=extractJsonArray(text);
+  if(!jsonStr)return[];
+  try{const p=JSON.parse(jsonStr);return Array.isArray(p)?p:[];}catch{return[];}
 }
 
 /* ── Defaults ───────────────────────────────────────────── */
@@ -439,6 +436,123 @@ function EditTitle({value,onSave}){
 }
 
 /* ═══════════════════════════════════════════
+   BIOMETRIC GATE  (Face ID / Touch ID / Fingerprint)
+═══════════════════════════════════════════ */
+function BiometricGate({onPass,onSkip}){
+  const[state,setState]=useState("idle"); // idle|working|done|notsupported
+  const[errMsg,setErrMsg]=useState("");
+  const CRED="us_bio";
+
+  // Check support on mount — don't auto-trigger, wait for user tap
+  useEffect(()=>{
+    if(!window.PublicKeyCredential){
+      setState("notsupported");
+    } else {
+      PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
+        .then(ok=>{ if(!ok)setState("notsupported"); })
+        .catch(()=>setState("notsupported"));
+    }
+  },[]);
+
+  const doWebAuthn=async()=>{
+    setState("working"); setErrMsg("");
+    const existing=gs(CRED,null);
+    try{
+      if(existing){
+        // ── Authenticate with stored credential ──
+        const rawId=new Uint8Array(atob(existing).split("").map(c=>c.charCodeAt(0)));
+        const challenge=window.crypto.getRandomValues(new Uint8Array(32));
+        await navigator.credentials.get({
+          publicKey:{
+            challenge,
+            rpId:window.location.hostname,
+            allowCredentials:[{type:"public-key",id:rawId}],
+            userVerification:"required",
+            timeout:60000,
+          }
+        });
+        setState("done"); onPass();
+      } else {
+        // ── Register new credential ──
+        const challenge=window.crypto.getRandomValues(new Uint8Array(32));
+        const cred=await navigator.credentials.create({
+          publicKey:{
+            challenge,
+            rp:{name:"us.",id:window.location.hostname},
+            user:{id:new Uint8Array([1,2,3]),name:"us.user",displayName:"us."},
+            pubKeyCredParams:[{type:"public-key",alg:-7},{type:"public-key",alg:-257}],
+            authenticatorSelection:{authenticatorAttachment:"platform",userVerification:"required"},
+            timeout:60000,
+          }
+        });
+        const id=btoa(String.fromCharCode(...new Uint8Array(cred.rawId)));
+        ss(CRED,id);
+        setState("done"); onPass();
+      }
+    }catch(e){
+      setState("idle");
+      if(e.name==="NotAllowedError"){
+        setErrMsg("Biometric was cancelled or not recognised. Try again.");
+      } else if(e.name==="InvalidStateError"){
+        // Credential may be corrupted — clear and let them re-register
+        ss(CRED,null);
+        setErrMsg("Credential error — cleared. Tap again to re-register.");
+      } else {
+        setErrMsg(e.message||"Unknown error");
+      }
+    }
+  };
+
+  const hasCredential=!!gs(CRED,null);
+
+  if(state==="notsupported") return(
+    <div className="nfc-wrap">
+      <div style={{fontSize:"clamp(44px,12vw,56px)",marginBottom:16}}>🔐</div>
+      <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(22px,6vw,28px)",fontWeight:600,color:"var(--ink)",marginBottom:10,textAlign:"center"}}>Biometric unavailable</h2>
+      <p style={{fontSize:14,color:"var(--muted)",textAlign:"center",lineHeight:1.75,maxWidth:280,marginBottom:24}}>
+        This browser or device doesn't support Face ID / fingerprint unlock. You can still use the app with just your NFC tag.
+      </p>
+      <button className="btn-p" style={{maxWidth:260,width:"100%"}} onClick={onSkip}>Continue →</button>
+    </div>
+  );
+
+  if(state==="working") return(
+    <div className="nfc-wrap">
+      <div style={{fontSize:"clamp(44px,12vw,56px)",marginBottom:16}}>🔐</div>
+      <div className="spinner" style={{margin:"16px auto"}}/>
+      <p style={{fontSize:14,color:"var(--muted)",textAlign:"center",marginTop:10}}>
+        {hasCredential?"Waiting for biometric…":"Follow the on-screen prompt to register…"}
+      </p>
+    </div>
+  );
+
+  return(
+    <div className="nfc-wrap">
+      <div style={{fontSize:"clamp(44px,12vw,56px)",marginBottom:16,animation:"hb 2s ease infinite"}}>
+        {hasCredential?"🔐":"👆"}
+      </div>
+      <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(22px,6vw,28px)",fontWeight:600,color:"var(--ink)",marginBottom:10,textAlign:"center"}}>
+        {hasCredential?"Verify it's you":"Set up biometric"}
+      </h2>
+      <p style={{fontSize:14,color:"var(--muted)",textAlign:"center",lineHeight:1.75,maxWidth:280,marginBottom:24}}>
+        {hasCredential
+          ?"Use Face ID or fingerprint to unlock us."
+          :"Add Face ID or fingerprint as a second lock. You only do this once."}
+      </p>
+      {errMsg&&<p style={{color:"#e05050",fontSize:13,textAlign:"center",marginBottom:16,maxWidth:260}}>{errMsg}</p>}
+      <button className="btn-p" style={{maxWidth:260,width:"100%",marginBottom:14}} onClick={doWebAuthn}>
+        {hasCredential?"🔐 Unlock with Biometric":"👆 Set Up Biometric"}
+      </button>
+      {hasCredential&&<button className="btn-g" style={{marginBottom:8}} onClick={()=>{ss(CRED,null);setErrMsg("Cleared. Tap above to re-register.");}}>
+        Reset biometric
+      </button>}
+      <button className="btn-g" onClick={onSkip}>Skip for now</button>
+    </div>
+  );
+}
+
+
+/* ═══════════════════════════════════════════
    NFC GATE  — Web NFC on Android, URL fallback on iOS
 ═══════════════════════════════════════════ */
 function NFCGate({onPass}){
@@ -446,14 +560,11 @@ function NFCGate({onPass}){
   const[tagErr,setTagErr]=useState("");
 
   useEffect(()=>{
-    // ── 1. Already unlocked within 12-hour window ──────────
-    if(nfcIsUnlocked()){onPass();return;}
-
-    // ── 2. URL token present (NFC tag opened a link, or iOS) ─
+    // ── 1. URL token present (NFC tag opened a link — iOS / direct URL) ──
     const p=new URLSearchParams(window.location.search);
     const token=p.get("nfc");
     if(token){
-      window.history.replaceState({},"","/"); // wipe token from address bar
+      window.history.replaceState({},"","/"); // wipe token from address bar immediately
       if(nfcValidateToken(token)){onPass();return;}
       setTagErr("Invalid tag. Make sure you are using your us. tag.");
     }
@@ -593,12 +704,110 @@ function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
     </div>
   );
 
-  // ── Step 2: Normal login ────────────────────────────────
-  const[resetMode,setResetMode]=useState(false);
-  const[resetEmail,setResetEmail]=useState(email||"");
-  const[resetSent,setResetSent]=useState(false);
+  // ── Step 2: Normal login + OTP reset ──────────────────
+  const[resetStep,setResetStep]=useState("form");
   const[resetBusy,setResetBusy]=useState(false);
+  const[resetToken,setResetToken]=useState("");
+  const[resetOtp,setResetOtp]=useState("");
+  const[newPw,setNewPw]=useState("");
+  const[confirmPw,setConfirmPw]=useState("");
 
+  const sendOtp=async()=>{
+    if(!resetEmail.trim()){setErr("Enter your email first.");return;}
+    setResetBusy(true);setErr("");
+    try{
+      const resp=await fetch("/.netlify/functions/send-otp",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({email:resetEmail.trim()})
+      });
+      const data=await resp.json();
+      if(data.error){setErr(data.error);setResetBusy(false);return;}
+      setResetToken(data.token);
+      setResetStep("code");
+      setResetOtp("");
+    }catch(e){setErr("Network error. Check your connection.");}
+    setResetBusy(false);
+  };
+
+  const doReset=async()=>{
+    if(newPw.length<6){setErr("Password must be at least 6 characters.");return;}
+    if(newPw!==confirmPw){setErr("Passwords do not match.");return;}
+    setResetBusy(true);setErr("");
+    try{
+      const resp=await fetch("/.netlify/functions/reset-password",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({email:resetEmail.trim(),otp:resetOtp,token:resetToken,new_password:newPw})
+      });
+      const data=await resp.json();
+      if(data.error){setErr(data.error);setResetBusy(false);return;}
+      setResetStep("done");
+    }catch(e){setErr("Network error. Check your connection.");}
+    setResetBusy(false);
+  };
+
+  // ── Reset password view ──────────────────────────────
+  if(resetMode)return(
+    <div className="auth-wrap">
+      <div className="auth-heart">{resetStep==="done"?"✅":"🔑"}</div>
+      <h1 className="auth-title" style={{fontSize:"clamp(22px,6.5vw,30px)"}}>
+        {resetStep==="form"?"Forgot Password":resetStep==="code"?"Enter Code":resetStep==="newpw"?"New Password":"All done!"}
+      </h1>
+
+      {resetStep==="form"&&<div style={{width:"100%"}}>
+        <p className="auth-sub" style={{marginBottom:20}}>Enter your email and we'll send a 6-digit reset code straight to your inbox.</p>
+        <input className={`auth-field${err?" err":""}`} type="email" placeholder="Your email"
+          value={resetEmail} onChange={e=>setResetEmail(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&sendOtp()} autoFocus/>
+        {err&&<p style={{color:"#e05050",fontSize:13,marginBottom:10,textAlign:"center"}}>{err}</p>}
+        <button className="btn-p" style={{marginBottom:12}} onClick={sendOtp} disabled={resetBusy}>
+          {resetBusy?"Sending code…":"Send Code →"}
+        </button>
+        <button className="btn-g" onClick={()=>{setResetMode(false);setErr("");}}>← Back to Sign In</button>
+      </div>}
+
+      {resetStep==="code"&&<div style={{width:"100%"}}>
+        <p className="auth-sub" style={{marginBottom:20}}>
+          A 6-digit code was sent to <strong>{resetEmail}</strong>.<br/>
+          Check your inbox — it arrives within 30 seconds.
+        </p>
+        <input className={`auth-field${err?" err":""}`} type="text" inputMode="numeric"
+          placeholder="000000" maxLength={6} value={resetOtp}
+          onChange={e=>setResetOtp(e.target.value.replace(/\D/g,""))} autoFocus
+          style={{textAlign:"center",letterSpacing:10,fontSize:26}}/>
+        {err&&<p style={{color:"#e05050",fontSize:13,marginBottom:10,textAlign:"center"}}>{err}</p>}
+        <button className="btn-p" style={{marginBottom:10}} onClick={()=>{if(resetOtp.length===6){setResetStep("newpw");setErr("");}else setErr("Enter the full 6-digit code.");}} disabled={resetBusy}>
+          Verify Code →
+        </button>
+        <button className="btn-g" style={{marginBottom:8}} onClick={()=>{sendOtp();}}>Resend code</button>
+        <button className="btn-g" onClick={()=>{setResetStep("form");setErr("");}}>← Change email</button>
+      </div>}
+
+      {resetStep==="newpw"&&<div style={{width:"100%"}}>
+        <p className="auth-sub" style={{marginBottom:20}}>Choose a new password for your account.</p>
+        <input className={`auth-field${err?" err":""}`} type="password" placeholder="New password (min 6 characters)"
+          value={newPw} onChange={e=>setNewPw(e.target.value)} autoFocus/>
+        <input className={`auth-field${err?" err":""}`} type="password" placeholder="Confirm new password"
+          value={confirmPw} onChange={e=>setConfirmPw(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&doReset()}/>
+        {err&&<p style={{color:"#e05050",fontSize:13,marginBottom:10,textAlign:"center"}}>{err}</p>}
+        <button className="btn-p" onClick={doReset} disabled={resetBusy}>
+          {resetBusy?"Updating password…":"Set New Password"}
+        </button>
+      </div>}
+
+      {resetStep==="done"&&<div style={{width:"100%"}}>
+        <div style={{background:"#e8f5e9",borderRadius:14,padding:"18px",marginBottom:20,textAlign:"center"}}>
+          <p style={{fontSize:15,fontWeight:600,color:"#2e7d32",marginBottom:4}}>Password updated!</p>
+          <p style={{fontSize:13,color:"#388e3c"}}>Sign in below with your new password.</p>
+        </div>
+        <button className="btn-p" onClick={()=>{setResetMode(false);setResetStep("form");setErr("");setNewPw("");setConfirmPw("");}}>
+          Back to Sign In
+        </button>
+      </div>}
+    </div>
+  );
+
+  // ── Normal sign in / register ────────────────────────
   const submit=async()=>{
     if(!email||!pw){setErr("Please fill in both fields.");return;}
     setBusy(true);setErr("");
@@ -614,86 +823,21 @@ function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
     setBusy(false);
   };
 
-  const sendReset=async()=>{
-    if(!resetEmail.trim()){setErr("Enter your email address above first.");return;}
-    if(!ALLOWED_EMAILS.includes(resetEmail.trim().toLowerCase())){setErr("That email isn't linked to this app.");return;}
-    setResetBusy(true);setErr("");
-    try{
-      await fbResetPassword(resetEmail.trim());
-      setResetSent(true);
-    }catch(e){setErr(e.message);}
-    setResetBusy(false);
-  };
-
-  // ── Forgot password view ──────────────────────────────
-  if(resetMode) return(
-    <div className="auth-wrap">
-      <div className="auth-heart">🔑</div>
-      <h1 className="auth-title" style={{fontSize:"clamp(24px,7vw,32px)"}}>Reset Password</h1>
-      {resetSent
-        ? <div style={{width:"100%"}}>
-            <div style={{background:"#e8f5e9",borderRadius:14,padding:"16px 18px",marginBottom:16,textAlign:"center"}}>
-              <p style={{fontSize:15,fontWeight:600,color:"#2e7d32",marginBottom:6}}>✅ Reset email sent!</p>
-              <p style={{fontSize:13,color:"#388e3c",lineHeight:1.7}}>
-                Sent to <strong>{resetEmail}</strong>
-              </p>
-            </div>
-            <div style={{background:"#fff8e1",borderRadius:14,padding:"14px 16px",marginBottom:16}}>
-              <p style={{fontSize:12,color:"#f57f17",fontWeight:700,marginBottom:6,letterSpacing:".05em",textTransform:"uppercase"}}>If the email hasn't arrived:</p>
-              <ul style={{fontSize:13,color:"#795548",lineHeight:2,paddingLeft:16}}>
-                <li>Check your <strong>Spam</strong> folder</li>
-                <li>Check <strong>Promotions</strong> tab (Gmail)</li>
-                <li>Search for <em>noreply@</em> or <em>firebase</em></li>
-                <li>Wait 2–3 minutes — it can be slow</li>
-                <li>Tap <strong>Resend</strong> below if still nothing</li>
-              </ul>
-            </div>
-            <button className="btn-p" style={{marginBottom:10}} onClick={()=>{setResetMode(false);setResetSent(false);setErr("");}}>
-              Back to Sign In
-            </button>
-            <button className="btn-g" onClick={()=>{setResetSent(false);setErr("");sendReset();}}>
-              Resend email
-            </button>
-          </div>
-        : <div style={{width:"100%"}}>
-            <p className="auth-sub" style={{marginBottom:20}}>
-              Enter your email and we'll send a reset link straight to your inbox.
-            </p>
-            <input
-              className={`auth-field${err?" err":""}`}
-              type="email"
-              placeholder="Your email address"
-              value={resetEmail}
-              onChange={e=>setResetEmail(e.target.value)}
-              onKeyDown={e=>e.key==="Enter"&&sendReset()}
-              autoFocus
-            />
-            {err&&<p style={{color:"#e05050",fontSize:13,marginBottom:10,textAlign:"center"}}>{err}</p>}
-            <button className="btn-p" style={{marginBottom:12}} onClick={sendReset} disabled={resetBusy}>
-              {resetBusy?"Sending…":"Send Reset Email"}
-            </button>
-            <button className="btn-g" onClick={()=>{setResetMode(false);setErr("");}}>
-              ← Back to Sign In
-            </button>
-          </div>
-      }
-    </div>
-  );
-
-  // ── Normal sign in / register view ───────────────────
   return(
     <div className="auth-wrap">
       <div className="auth-heart">💕</div>
       <h1 className="auth-title">us.</h1>
       <p className="auth-sub">{mode==="signup"?"Create your account":"Welcome back"}</p>
-      <input className={`auth-field${err?" err":""}`} type="email" placeholder="Email" value={email} onChange={e=>{setEmail(e.target.value);setResetEmail(e.target.value);}} autoComplete="email"/>
-      {mode==="signin"&&<input className={`auth-field${err?" err":""}`} type="password" placeholder="Password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()}/>}
-      {mode==="signup"&&<input className={`auth-field${err?" err":""}`} type="password" placeholder="Choose a password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()}/>}
+      <input className={`auth-field${err?" err":""}`} type="email" placeholder="Email" value={email}
+        onChange={e=>{setEmail(e.target.value);setResetEmail(e.target.value);}} autoComplete="email"/>
+      <input className={`auth-field${err?" err":""}`} type="password"
+        placeholder={mode==="signup"?"Choose a password":"Password"} value={pw}
+        onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()}/>
       {err&&<p style={{color:"#e05050",fontSize:13,marginBottom:10,textAlign:"center"}}>{err}</p>}
       <button className="btn-p" style={{marginBottom:10}} onClick={submit} disabled={busy}>
         {busy?"…":mode==="signup"?"Create Account":"Sign In"}
       </button>
-      {mode==="signin"&&<button className="btn-g" style={{marginBottom:6}} onClick={()=>{setResetMode(true);setErr("");}}>
+      {mode==="signin"&&<button className="btn-g" style={{marginBottom:6}} onClick={()=>{setResetMode(true);setResetStep("form");setErr("");}}>
         Forgot password?
       </button>}
       <button className="btn-g" onClick={()=>{setMode(m=>m==="signin"?"signup":"signin");setErr("");}}>
@@ -1188,7 +1332,6 @@ function GalleryPage({pageName,setPageName,myName}){
         <p className="cap" style={{marginBottom:26,textAlign:"center"}}>Enter PIN to open</p>
         <div className="pin-dots">{[0,1,2,3,4].map(i=><div key={i} className={`pin-dot${i<inp.length?" filled":""}${pinErr?" err":""}`}/>)}</div>
         <div className="pin-pad">{[1,2,3,4,5,6,7,8,9].map(n=><button key={n} className="pin-key" onClick={()=>press(String(n))}>{n}</button>)}<div/><button className="pin-key" onClick={()=>press("0")}>0</button><button className="pin-key" style={{fontFamily:"Inter",fontSize:20}} onClick={()=>setInp(p=>p.slice(0,-1))}>⌫</button></div>
-        <p className="cap" style={{marginTop:22}}>PIN: 69420</p>
       </div>
     </div>
   );
@@ -1245,7 +1388,7 @@ function NotesPage({pageName,setPageName}){
   const[notes,setNotes]=useState(()=>gs("my_private_notes",[]));
   const[modal,setModal]=useState(false);const[draft,setDraft]=useState("");const[expand,setExpand]=useState(null);
   const[ask,confirmDialog]=useConfirm();
-  const press=k=>{if(inp.length>=5)return;const next=inp+k;setInp(next);if(next.length===5){setTimeout(()=>{if(next==="69420"){setUnlocked(true);setInp("");}else{setPinErr(true);setTimeout(()=>{setInp("");setPinErr(false);},650);}},180);}};
+  const press=k=>{if(inp.length>=5)return;const next=inp+k;setInp(next);if(next.length===5){setTimeout(()=>{if(next===gs("notes_pin","69420")){setUnlocked(true);setInp("");}else{setPinErr(true);setTimeout(()=>{setInp("");setPinErr(false);},650);}},180);}};
   const addNote=()=>{if(!draft.trim())return;const n=[...notes,{id:Date.now(),text:draft.trim(),ts:Date.now()}];setNotes(n);ss("my_private_notes",n);setDraft("");setModal(false);};
   const delNote=id=>ask("Delete this note? This cannot be undone.",()=>{const n=notes.filter(n=>n.id!==id);setNotes(n);ss("my_private_notes",n);});
   if(!unlocked)return(
@@ -1256,7 +1399,6 @@ function NotesPage({pageName,setPageName}){
         <div className="priv-banner" style={{maxWidth:290,marginBottom:22}}>These notes are <strong>only visible to you.</strong><br/>They are never shared, synced, or seen by your partner — ever.</div>
         <div className="pin-dots">{[0,1,2,3,4].map(i=><div key={i} className={`pin-dot${i<inp.length?" filled":""}${pinErr?" err":""}`}/>)}</div>
         <div className="pin-pad">{[1,2,3,4,5,6,7,8,9].map(n=><button key={n} className="pin-key" onClick={()=>press(String(n))}>{n}</button>)}<div/><button className="pin-key" onClick={()=>press("0")}>0</button><button className="pin-key" style={{fontFamily:"Inter",fontSize:20}} onClick={()=>setInp(p=>p.slice(0,-1))}>⌫</button></div>
-        <p className="cap" style={{marginTop:22}}>PIN: 69420</p>
       </div>
     </div>
   );
@@ -1292,231 +1434,349 @@ function NotesPage({pageName,setPageName}){
 /* ═══════════════════════════════════════════
    SETTINGS PAGE
 ═══════════════════════════════════════════ */
-function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,names,setNames,myName,theirName,startDate,onSettings,fbApiKey,setFbApiKey,fbDbUrl,setFbDbUrl,synced,onReplayIntro}){
+function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,names,setNames,
+  myName,theirName,startDate,onSettings,fbApiKey,setFbApiKey,fbDbUrl,setFbDbUrl,synced,
+  onReplayIntro,onTestMusic,musicPlaying,stopMusic}){
+
+  const[bgDraft,setBgDraft]=useState(bgImage||"");
+  // Intro music
+  const[musicEnabled,setMusicEnabled]=useState(()=>gs("music_enabled",false));
+  const[musicHasFile,setMusicHasFile]=useState(()=>!!gs("music_file_b64",null));
+  const[musicFileName,setMusicFileName]=useState(()=>gs("music_file_name",""));
+  const[spotifyUrl,setSpotifyUrl]=useState(()=>gs("music_spotify_url",""));
+  const[musicMsg,setMusicMsg]=useState("");
+  const musicFileRef=useRef();
+
+  const toggleMusic=v=>{setMusicEnabled(v);ss("music_enabled",v);};
+
+  const handleMusicUpload=e=>{
+    const f=e.target.files[0];if(!f)return;
+    if(f.size>8*1024*1024){setMusicMsg("File too large. Max 8MB (keep it to a short intro clip).");return;}
+    const r=new FileReader();
+    r.onload=ev=>{
+      ss("music_file_b64",ev.target.result);
+      ss("music_file_name",f.name);
+      setMusicHasFile(true);
+      setMusicFileName(f.name);
+      setMusicMsg("Uploaded: "+f.name);
+    };
+    r.readAsDataURL(f);
+  };
+
+  const clearMusicFile=()=>{
+    ss("music_file_b64",null);ss("music_file_name","");
+    setMusicHasFile(false);setMusicFileName("");setMusicMsg("Removed.");
+  };
+
+  const saveSpotify=()=>{ss("music_spotify_url",spotifyUrl);setMusicMsg("Spotify URL saved.");};
+  const[nameDraft,setNameDraft]=useState({...names});
+  const[sN,setSN]=useState(myName);
+  const[sT,setST]=useState(theirName);
+  const[sS,setSS]=useState(startDate);
+
+  // Change PINs
+  const[galDraft,setGalDraft]=useState("");
+  const[notesDraft,setNotesDraft]=useState("");
+  const[pinMsg,setPinMsg]=useState("");
+  const savePins=()=>{
+    if(galDraft&&(galDraft.length!==5||!/^\d{5}$/.test(galDraft))){setPinMsg("Gallery PIN must be exactly 5 digits.");return;}
+    if(notesDraft&&(notesDraft.length!==5||!/^\d{5}$/.test(notesDraft))){setPinMsg("Notes PIN must be exactly 5 digits.");return;}
+    if(galDraft){ss("gal_pin",galDraft);setGalDraft("");}
+    if(notesDraft){ss("notes_pin",notesDraft);setNotesDraft("");}
+    setPinMsg((!galDraft&&!notesDraft)?"Enter a new PIN in at least one field.":"PINs updated! Close and reopen the section to use them.");
+  };
+
+  // Advanced section
+  const ADV_KEY="us_admin_pw";
+  const[advOpen,setAdvOpen]=useState(false);
+  const[advPw,setAdvPw]=useState("");
+  const[advErr,setAdvErr]=useState("");
   const[apiDraft,setApiDraft]=useState(fbApiKey||"");
   const[dbDraft,setDbDraft]=useState(fbDbUrl||"");
-  const[bgDraft,setBgDraft]=useState(bgImage||"");
-  const[nameDraft,setNameDraft]=useState({...names});
-  const connect=()=>{FIREBASE_API_KEY=apiDraft;FIREBASE_DB_URL=dbDraft;setFbApiKey(apiDraft);setFbDbUrl(dbDraft);ss("fb_api_key",apiDraft);ss("fb_db_url",dbDraft);};
+  const[newAdvPw,setNewAdvPw]=useState("");
+  const[advPwMsg,setAdvPwMsg]=useState("");
+  const[testBday,setTestBday]=useState(null);
+
+  const tryAdvUnlock=()=>{
+    const stored=gs(ADV_KEY,"Raza2026");
+    if(advPw===stored){setAdvOpen(true);setAdvErr("");}
+    else{setAdvErr("Incorrect password.");}
+  };
+  const saveAdvPw=()=>{
+    if(newAdvPw.length<4){setAdvPwMsg("Must be at least 4 characters.");return;}
+    ss(ADV_KEY,newAdvPw);setNewAdvPw("");setAdvPwMsg("Password updated ✓");
+    setTimeout(()=>setAdvPwMsg(""),3000);
+  };
+  const connectFb=()=>{
+    FIREBASE_API_KEY=apiDraft;
+    FIREBASE_DB_URL=dbDraft;
+    setFbApiKey(apiDraft);
+    setFbDbUrl(dbDraft);
+    ss("fb_api_key",apiDraft);
+    ss("fb_db_url",dbDraft);
+  };
+
   return(
     <div className="us-page pf">
       <div className="row-bw"><EditTitle value={pageName} onSave={setPageName}/></div>
 
-      <div className="card">
-        <h3 className="card-title" style={{marginBottom:12}}>Real-Time Sync</h3>
-        <p className="cap" style={{marginBottom:10}}><span className={`sync-dot ${synced?"on":"off"}`}/>{synced?"Connected — changes sync between both phones instantly":"Not connected — data saved locally only"}</p>
-        <div className="lbl" style={{marginBottom:5}}>Firebase Web API Key</div>
-        <input className="field" placeholder="AIzaSy…" value={apiDraft} onChange={e=>setApiDraft(e.target.value)} style={{marginBottom:10}}/>
-        <div className="lbl" style={{marginBottom:5}}>Realtime Database URL</div>
-        <input className="field" placeholder="https://your-project-default-rtdb.firebaseio.com" value={dbDraft} onChange={e=>setDbDraft(e.target.value)} style={{marginBottom:12}}/>
-        <button className="btn-p" onClick={connect}>Connect & Save</button>
-        <p className="cap" style={{marginTop:8}}>Free setup at console.firebase.google.com → Create project → Realtime Database → copy the URL and Web API Key here.</p>
-      </div>
-
+      {/* ── Theme ── */}
       <div className="card">
         <h3 className="card-title" style={{marginBottom:12}}>Theme</h3>
-        <div className="theme-grid">{Object.entries(THEMES).map(([k,t])=><button key={k} className={`theme-card${theme===k?" sel":""}`} style={{background:t.bg,border:`2px solid ${theme===k?t.accent:t.bg+"44"}`}} onClick={()=>setTheme(k)}><div style={{width:20,height:20,borderRadius:"50%",background:t.accent,margin:"0 auto 5px"}}/><div style={{fontSize:11,fontWeight:600,color:t.ink}}>{t.name}</div></button>)}</div>
-        <div className="lbl" style={{marginBottom:5}}>Background Image URL (optional)</div>
-        <input className="field" placeholder="https://… or leave blank for solid colour" value={bgDraft} onChange={e=>setBgDraft(e.target.value)} style={{marginBottom:10}}/>
-        <button className="btn-p" onClick={()=>setBgImage(bgDraft||null)}>Apply</button>
+        <div className="theme-grid">
+          {Object.entries(THEMES).map(([k,t])=>(
+            <button key={k} className={`theme-card${theme===k?" sel":""}`}
+              style={{background:t.bg,border:`2px solid ${theme===k?t.accent:t.bg+"44"}`}}
+              onClick={()=>setTheme(k)}>
+              <div style={{width:20,height:20,borderRadius:"50%",background:t.accent,margin:"0 auto 5px"}}/>
+              <div style={{fontSize:11,fontWeight:600,color:t.ink}}>{t.name}</div>
+            </button>
+          ))}
+        </div>
+        <div className="lbl" style={{marginBottom:5}}>Background Image URL</div>
+        <input className="field" placeholder="https://… or leave blank for solid colour"
+          value={bgDraft} onChange={e=>setBgDraft(e.target.value)} style={{marginBottom:10}}/>
+        <button className="btn-p" onClick={()=>setBgImage(bgDraft||null)}>Apply Background</button>
       </div>
 
+      {/* ── Page Names ── */}
       <div className="card">
         <h3 className="card-title" style={{marginBottom:12}}>Page Names</h3>
-        {Object.entries(nameDraft).map(([k,v])=><div key={k} className="srow"><span style={{fontSize:13,color:"var(--slate)",textTransform:"capitalize",width:80}}>{k}</span><input className="field" style={{flex:1,padding:"5px 8px",fontSize:13}} value={v} onChange={e=>setNameDraft(d=>({...d,[k]:e.target.value}))}/></div>)}
-        <button className="btn-p" style={{marginTop:12}} onClick={()=>setNames(nameDraft)}>Save All Names</button>
+        {Object.entries(nameDraft).map(([k,v])=>(
+          <div key={k} className="srow">
+            <span style={{fontSize:13,color:"var(--slate)",textTransform:"capitalize",width:80}}>{k}</span>
+            <input className="field" style={{flex:1,padding:"5px 8px",fontSize:13}} value={v}
+              onChange={e=>setNameDraft(d=>({...d,[k]:e.target.value}))}/>
+          </div>
+        ))}
+        <button className="btn-p" style={{marginTop:12}} onClick={()=>setNames(nameDraft)}>Save Names</button>
       </div>
 
+      {/* ── Profile ── */}
       <div className="card">
-        <h3 className="card-title" style={{marginBottom:12}}>Welcome Screen</h3>
-        <p className="cap" style={{marginBottom:14,lineHeight:1.7}}>
-          Replay the welcome walkthrough that plays when you first scan your NFC tag. Great to revisit, or show Areebah how much thought went into every section.
-        </p>
-        <button className="btn-p" onClick={onReplayIntro}>
-          💕 Replay Welcome Intro
-        </button>
+        <h3 className="card-title" style={{marginBottom:12}}>Profile</h3>
+        {[{l:"Your Name",v:sN,s:setSN},{l:"Their Name",v:sT,s:setST}].map(f=>(
+          <div key={f.l} style={{marginBottom:10}}>
+            <div className="lbl" style={{marginBottom:5}}>{f.l}</div>
+            <input className="field" value={f.v} onChange={e=>f.s(e.target.value)}/>
+          </div>
+        ))}
+        <div style={{marginBottom:12}}>
+          <div className="lbl" style={{marginBottom:5}}>Relationship Start Date</div>
+          <input className="field" type="date" value={sS} onChange={e=>setSS(e.target.value)}/>
+        </div>
+        <button className="btn-p" onClick={()=>onSettings({myName:sN,theirName:sT,startDate:sS})}>Save Profile</button>
       </div>
 
+      {/* ── Change PINs ── */}
       <div className="card">
-        <h3 className="card-title" style={{marginBottom:4}}>Storage Info</h3>
-        <p className="cap" style={{lineHeight:1.8}}>
-          Photos are compressed to ~100KB each before upload. Firebase free tier gives 1GB database storage (~10,000 photos).<br/><br/>
-          Videos are stored <strong>locally on-device only</strong> (marked "LOCAL"). To share videos between phones, upgrade to Firebase Storage (5GB free) or use a shared Google Drive link.<br/><br/>
-          To increase limits: upgrade to Firebase Blaze plan (~£0.025/GB/month).
-        </p>
+        <h3 className="card-title" style={{marginBottom:6}}>Change PINs</h3>
+        <p className="cap" style={{marginBottom:14}}>PINs protect the Gallery and Private Notes. Must be exactly 5 digits.</p>
+        <div className="lbl" style={{marginBottom:5}}>Gallery PIN</div>
+        <input className="field" type="password" inputMode="numeric" maxLength={5}
+          placeholder="New 5-digit PIN" value={galDraft}
+          onChange={e=>setGalDraft(e.target.value.replace(/\D/g,"").slice(0,5))}
+          style={{marginBottom:10}}/>
+        <div className="lbl" style={{marginBottom:5}}>Private Notes PIN</div>
+        <input className="field" type="password" inputMode="numeric" maxLength={5}
+          placeholder="New 5-digit PIN" value={notesDraft}
+          onChange={e=>setNotesDraft(e.target.value.replace(/\D/g,"").slice(0,5))}
+          style={{marginBottom:12}}/>
+        {pinMsg&&<p style={{fontSize:13,color:pinMsg.includes("updated")?"#2e7d32":"#e05050",marginBottom:10,textAlign:"center"}}>{pinMsg}</p>}
+        <button className="btn-p" onClick={savePins}>Save PINs</button>
       </div>
-    </div>
-  );
-}
 
-/* ═══════════════════════════════════════════
-   CONFETTI
-═══════════════════════════════════════════ */
-function Confetti(){
-  const pieces=Array.from({length:48},(_,i)=>({
-    id:i,
-    left:Math.random()*100,
-    delay:Math.random()*2.5,
-    dur:2.2+Math.random()*2,
-    color:['#C45450','#F3DDD5','#FFD700','#FF85A1','#85D1FF','#A8F0A8','#E8A8F0','#F0D8A8'][Math.floor(Math.random()*8)],
-    size:5+Math.random()*7,
-    round:Math.random()>0.5,
-  }));
-  return(
-    <div style={{position:'fixed',inset:0,pointerEvents:'none',overflow:'hidden',zIndex:200}}>
-      {pieces.map(p=>(
-        <div key={p.id} style={{
-          position:'absolute',left:`${p.left}%`,top:-20,
-          width:p.size,height:p.size,
-          background:p.color,
-          borderRadius:p.round?'50%':'3px',
-          animation:`confettiFall ${p.dur}s ${p.delay}s linear infinite`,
-        }}/>
-      ))}
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════
-   BIRTHDAY CARD
-═══════════════════════════════════════════ */
-function BirthdayCard(){
-  function daysUntil(day,month){
-    const now=new Date();
-    let next=new Date(now.getFullYear(),month-1,day);
-    if(next<=now)next.setFullYear(now.getFullYear()+1);
-    return Math.ceil((next-now)/86400000);
-  }
-  function isToday(day,month){
-    const n=new Date();
-    return n.getDate()===day&&n.getMonth()+1===month;
-  }
-  function getAge(day,month,year){
-    const n=new Date();
-    let age=n.getFullYear()-year;
-    if(n.getMonth()+1<month||(n.getMonth()+1===month&&n.getDate()<day))age--;
-    return age;
-  }
-
-  const todayBday=BIRTHDAYS.find(b=>isToday(b.day,b.month));
-  const [showConf,setShowConf]=useState(!!todayBday);
-  useEffect(()=>{
-    if(!showConf)return;
-    const t=setTimeout(()=>setShowConf(false),8000);
-    return()=>clearTimeout(t);
-  },[showConf]);
-
-  if(todayBday) return(
-    <>
-      {showConf&&<Confetti/>}
-      <div className="bday-card-today">
-        <div style={{fontSize:'clamp(36px,9vw,48px)',marginBottom:10,animation:'heartPulse 1.2s ease infinite'}}>{todayBday.emoji} 🎂 {todayBday.emoji}</div>
-        <h3 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:'clamp(20px,5.5vw,26px)',fontWeight:600,color:'var(--ink)',marginBottom:8}}>
-          Happy Birthday {todayBday.name}! 🎉
-        </h3>
-        <p style={{fontSize:13,color:'var(--slate)',lineHeight:1.7,maxWidth:280,margin:'0 auto 10px'}}>
-          {todayBday.msg}
-        </p>
-        <p style={{fontSize:11,color:'var(--muted)'}}>
-          Turning {getAge(todayBday.day,todayBday.month,todayBday.year)} today 🌟
-        </p>
-        <button style={{marginTop:12,background:'none',border:'none',cursor:'pointer',fontSize:12,color:'var(--accent)',fontWeight:600}} onClick={()=>setShowConf(true)}>
-          🎊 Celebrate again
-        </button>
+      {/* ── Welcome screen ── */}
+      <div className="card">
+        <h3 className="card-title" style={{marginBottom:10}}>Welcome Screen</h3>
+        <p className="cap" style={{marginBottom:14}}>Replay the intro walkthrough that plays when you first scan the NFC tag.</p>
+        <button className="btn-p" onClick={onReplayIntro}>💕 Replay Welcome Intro</button>
       </div>
-    </>
-  );
 
-  return(
-    <div className="bday-card-norm">
-      <h3 className="card-title" style={{marginBottom:12}}>🎂 Birthdays</h3>
-      {BIRTHDAYS.map((b,i)=>{
-        const days=daysUntil(b.day,b.month);
-        const soon=days<=7;
-        const age=getAge(b.day,b.month,b.year);
-        return(
-          <div key={b.name} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:i<BIRTHDAYS.length-1?'1px solid var(--border)':'none'}}>
-            <div>
-              <span style={{fontSize:18,marginRight:8}}>{b.emoji}</span>
-              <span style={{fontWeight:600,fontSize:14,color:'var(--ink)'}}>{b.name}</span>
-              <span style={{fontSize:11,color:'var(--muted)',marginLeft:6,display:'inline-block'}}>{b.day}/{b.month}/{b.year}</span>
-              {soon&&<span className="bday-soon-badge">coming soon ✨</span>}
+      {/* ── Intro Music ── */}
+      <div className="card">
+        <div className="card-hdr">
+          <h3 className="card-title">Intro Music</h3>
+          <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
+            <div onClick={()=>toggleMusic(!musicEnabled)} style={{width:38,height:22,background:musicEnabled?"var(--accent)":"var(--border)",borderRadius:50,position:"relative",transition:".2s",flexShrink:0,cursor:"pointer"}}>
+              <div style={{position:"absolute",top:3,left:musicEnabled?17:3,width:16,height:16,background:"#fff",borderRadius:"50%",transition:".2s",boxShadow:"0 1px 4px rgba(0,0,0,.2)"}}/>
             </div>
-            <div style={{textAlign:'right',flexShrink:0}}>
-              <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:'clamp(18px,5vw,22px)',fontWeight:700,color:soon?'var(--accent)':'var(--ink)'}}>{days}</span>
-              <span style={{fontSize:11,color:'var(--muted)',marginLeft:3}}>days</span>
-              <div style={{fontSize:10,color:'var(--muted)'}}>turns {age+1}</div>
+            <span style={{fontSize:12,fontWeight:500,color:"var(--slate)"}}>{musicEnabled?"On — plays on unlock":"Off"}</span>
+          </label>
+        </div>
+
+        <p className="cap" style={{marginBottom:14,lineHeight:1.75}}>
+          Upload a song or short clip and it will play automatically the moment the NFC tag is scanned and the app unlocks. A small stop button appears in the corner if you want to pause it.
+        </p>
+
+        {/* Upload audio file */}
+        <div className="lbl" style={{marginBottom:8}}>Audio File (MP3, M4A, AAC — max 8MB)</div>
+        {musicHasFile?(
+          <div style={{background:"var(--rose)",borderRadius:12,padding:"10px 14px",marginBottom:10,display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:18}}>🎵</span>
+            <span style={{fontSize:13,fontWeight:500,color:"var(--ink)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{musicFileName||"Audio file"}</span>
+            <button onClick={clearMusicFile} style={{background:"none",border:"none",cursor:"pointer",color:"var(--accent)",fontSize:12,fontWeight:600,flexShrink:0}}>Remove</button>
+          </div>
+        ):(
+          <button className="btn-sm" style={{width:"100%",padding:"11px",marginBottom:10,borderRadius:12,textAlign:"center"}}
+            onClick={()=>musicFileRef.current.click()}>
+            📁 Choose Audio File
+          </button>
+        )}
+        <input ref={musicFileRef} type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg" style={{display:"none"}} onChange={handleMusicUpload}/>
+
+        {/* Spotify link (embed, not autoplay) */}
+        <div className="lbl" style={{marginBottom:6,marginTop:8}}>Spotify Link (optional — shows embed player)</div>
+        <p className="cap" style={{marginBottom:8}}>Paste a Spotify song link. Note: Spotify cannot autoplay in a browser — the uploaded file above is what plays automatically. This just shows a Spotify player for the song.</p>
+        <input className="field" placeholder="https://open.spotify.com/track/…"
+          value={spotifyUrl} onChange={e=>setSpotifyUrl(e.target.value)}
+          style={{marginBottom:8}}/>
+        <button className="btn-sm" onClick={saveSpotify}>Save Spotify Link</button>
+
+        {/* Spotify embed preview */}
+        {spotifyUrl&&(()=>{
+          const match=spotifyUrl.match(/track\/([a-zA-Z0-9]+)/);
+          if(!match)return<p className="cap" style={{marginTop:8,color:"#e05050"}}>Invalid Spotify link. Paste a full track URL.</p>;
+          return(
+            <iframe
+              src={`https://open.spotify.com/embed/track/${match[1]}?utm_source=generator&theme=0`}
+              width="100%" height="80" frameBorder="0"
+              allow="autoplay; clipboard-write; encrypted-media; picture-in-picture"
+              style={{borderRadius:12,marginTop:12,border:"none"}}
+            />
+          );
+        })()}
+
+        {musicMsg&&<p style={{fontSize:12,color:"var(--accent)",marginTop:10,fontWeight:500}}>{musicMsg}</p>}
+
+        {/* Test button */}
+        {musicHasFile&&<button className="btn-p" style={{marginTop:12}} onClick={musicPlaying?stopMusic:onTestMusic}>
+          {musicPlaying?"⏹ Stop Music":"▶ Test Music Now"}
+        </button>}
+      </div>
+
+      {/* ── Advanced (password protected) ── */}
+      <div className="card">
+        <h3 className="card-title" style={{marginBottom:10}}>Advanced</h3>
+        {!advOpen?(
+          <div>
+            <p className="cap" style={{marginBottom:12}}>Restricted access — Firebase setup, feature testing, and developer options.</p>
+            <input className="field" type="password" placeholder="Admin password"
+              value={advPw} onChange={e=>setAdvPw(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&tryAdvUnlock()}
+              style={{marginBottom:10}}/>
+            {advErr&&<p style={{color:"#e05050",fontSize:13,marginBottom:10}}>{advErr}</p>}
+            <button className="btn-p" onClick={tryAdvUnlock}>Unlock</button>
+          </div>
+        ):(
+          <div>
+            <p style={{fontSize:11,fontWeight:700,color:"var(--accent)",letterSpacing:".08em",marginBottom:16,textTransform:"uppercase"}}>🔓 Advanced Unlocked</p>
+
+            {/* Firebase sync */}
+            <div style={{borderBottom:"1px solid var(--border)",paddingBottom:16,marginBottom:16}}>
+              <div className="lbl" style={{marginBottom:4}}>Real-Time Sync</div>
+              <p className="cap" style={{marginBottom:10}}><span className={`sync-dot ${synced?"on":"off"}`}/>{synced?"Connected — both phones sync live":"Not connected — local only"}</p>
+              <div className="lbl" style={{marginBottom:4}}>Firebase Web API Key</div>
+              <input className="field" placeholder="AIzaSy…" value={apiDraft}
+                onChange={e=>setApiDraft(e.target.value)} style={{marginBottom:8}}/>
+              <div className="lbl" style={{marginBottom:4}}>Realtime Database URL</div>
+              <input className="field" placeholder="https://…firebasedatabase.app"
+                value={dbDraft} onChange={e=>setDbDraft(e.target.value)} style={{marginBottom:10}}/>
+              <button className="btn-p" onClick={connectFb}>Connect Firebase</button>
+              <p className="cap" style={{marginTop:8}}>Free setup: console.firebase.google.com → Create project → Realtime Database → copy URL. Then Project Settings → Web app → copy apiKey.</p>
+            </div>
+
+            {/* Feature testing */}
+            <div style={{borderBottom:"1px solid var(--border)",paddingBottom:16,marginBottom:16}}>
+              <div className="lbl" style={{marginBottom:10}}>🧪 Feature Testing</div>
+              <p className="cap" style={{marginBottom:12}}>Preview animations and features before they go live. Only you can see this section.</p>
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                <button className="btn-sm" style={{textAlign:"left",padding:"10px 14px"}}
+                  onClick={()=>setTestBday("areebah")}>🌸 Test Areebah's Birthday Animation</button>
+                <button className="btn-sm" style={{textAlign:"left",padding:"10px 14px"}}
+                  onClick={()=>setTestBday("uthmaan")}>💙 Test Uthmaan's Birthday Animation</button>
+                <button className="btn-sm" style={{textAlign:"left",padding:"10px 14px"}}
+                  onClick={onReplayIntro}>💕 Test Welcome Intro</button>
+              </div>
+            </div>
+
+            {/* Storage info */}
+            <div style={{borderBottom:"1px solid var(--border)",paddingBottom:16,marginBottom:16}}>
+              <div className="lbl" style={{marginBottom:8}}>Storage Info</div>
+              <p className="cap" style={{lineHeight:1.8}}>
+                Photos are compressed to ~100KB each. Firebase free tier holds ~7,000–16,000 photos (1GB limit).<br/><br/>
+                Videos are stored locally on-device only (LOCAL badge). For shared videos: use Firebase Storage (5GB free on Blaze plan) or share Google Drive links via Fridge notes.<br/><br/>
+                Upgrade to Firebase Blaze for ~£0.025/GB/month if you need more.
+              </p>
+            </div>
+
+            {/* Change admin password */}
+            <div>
+              <div className="lbl" style={{marginBottom:8}}>Change Admin Password</div>
+              <input className="field" type="password" placeholder="New admin password"
+                value={newAdvPw} onChange={e=>setNewAdvPw(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&saveAdvPw()}
+                style={{marginBottom:10}}/>
+              {advPwMsg&&<p style={{fontSize:13,color:advPwMsg.includes("updated")?"#2e7d32":"#e05050",marginBottom:8}}>{advPwMsg}</p>}
+              <button className="btn-p" onClick={saveAdvPw}>Update Admin Password</button>
+            </div>
+
+            <button style={{marginTop:16,background:"none",border:"none",cursor:"pointer",fontSize:12,color:"var(--muted)",fontWeight:600}} onClick={()=>{setAdvOpen(false);setAdvPw("");}}>
+              🔒 Lock Advanced
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Birthday test overlay */}
+      {testBday&&(()=>{
+        const b=BIRTHDAYS.find(bd=>bd.name.toLowerCase()===testBday);
+        if(!b)return null;
+        const testAge=new Date().getFullYear()-b.year;
+        return(
+          <div className="lb-overlay" onClick={()=>setTestBday(null)}>
+            <Confetti/>
+            <div style={{maxWidth:340,width:"100%",borderRadius:20,overflow:"hidden",background:"linear-gradient(140deg,var(--deep),var(--rose))",padding:28,textAlign:"center",position:"relative",zIndex:201}}
+              onClick={e=>e.stopPropagation()}>
+              <div style={{fontSize:48,marginBottom:10,animation:"heartPulse 1.2s ease infinite"}}>{b.emoji} 🎂 {b.emoji}</div>
+              <h3 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:26,fontWeight:600,color:"var(--ink)",marginBottom:10}}>
+                Happy Birthday {b.name}! 🎉
+              </h3>
+              <p style={{fontSize:13,color:"var(--slate)",lineHeight:1.7,marginBottom:6}}>{b.msg}</p>
+              <p style={{fontSize:11,color:"var(--muted)",marginBottom:18}}>Turning {testAge} · 🧪 Test Mode</p>
+              <button className="btn-p" onClick={()=>setTestBday(null)}>Close Test</button>
             </div>
           </div>
         );
-      })}
+      })()}
     </div>
   );
 }
 
+
 /* ═══════════════════════════════════════════
-   INTRO SCREEN  — first-time welcome walkthrough
+   FLOATING MUSIC PLAYER
 ═══════════════════════════════════════════ */
-function IntroScreen({onDone}){
-  const [idx,setIdx]=useState(0);
-  const [key,setKey]=useState(0); // force re-animation on slide change
-
-  // Check if there's a "what's new" slide to prepend
-  const seenVersion=gs('us_intro_version','');
-  const isUpdate=seenVersion&&seenVersion!==APP_VERSION;
-
-  const whatNewSlide=isUpdate?[{
-    emoji:'✨',
-    title:'Something new.',
-    body:`us. has been updated to version ${APP_VERSION}. Here's what Uthmaan added:
-
-• Birthday tracker with confetti celebrations
-• Welcome walkthrough (this one!)
-• Replay intro anytime from Settings
-• Confetti on birthdays
-• NFC unlocks the app directly on Android`,
-    sub:'Tap Next to see the full tour →',
-    isUpdate:true,
-  }]:[];
-
-  const slides=[...whatNewSlide,...INTRO_SLIDES];
-  const slide=slides[idx];
-  const isLast=idx===slides.length-1;
-
-  const next=()=>{
-    if(isLast){ss('us_intro_version',APP_VERSION);onDone();return;}
-    setIdx(i=>i+1);setKey(k=>k+1);
-  };
-  const skip=()=>{ss('us_intro_version',APP_VERSION);onDone();};
-
+function FloatingMusicPlayer({audioRef,playing,onStop}){
+  if(!playing)return null;
   return(
-    <div className="intro-screen">
-      {/* Skip */}
-      <div style={{width:'100%',display:'flex',justifyContent:'flex-end',flexShrink:0}}>
-        {!isLast&&<button onClick={skip} style={{background:'none',border:'none',cursor:'pointer',fontSize:12,fontWeight:600,color:'var(--muted)',letterSpacing:'.06em'}}>SKIP</button>}
-      </div>
-
-      {/* Slide */}
-      <div className="intro-slide" key={key}>
-        <div className="intro-emoji">{slide.emoji}</div>
-        <h2 className="intro-title">{slide.title}</h2>
-        <p className="intro-body" style={{whiteSpace:'pre-line'}}>{slide.body}</p>
-        {slide.sub&&<p className="intro-sub">{slide.sub}</p>}
-        {slide.tag&&<p className="intro-tag">{slide.tag}</p>}
-      </div>
-
-      {/* Progress dots */}
-      <div className="intro-dots">
-        {slides.map((_,i)=><div key={i} className={`intro-dot${i===idx?' on':''}`}/>)}
-      </div>
-
-      {/* Buttons */}
-      <div className="intro-btns">
-        {idx>0&&<button className="btn-p" style={{background:'var(--rose)',color:'var(--ink)',flex:1}} onClick={()=>{setIdx(i=>i-1);setKey(k=>k+1);}}>← Back</button>}
-        <button className="btn-p" style={{flex:2}} onClick={next}>
-          {isLast?"Let's go 💕":"Next →"}
-        </button>
-      </div>
+    <div style={{
+      position:"fixed",bottom:"calc(70px + env(safe-area-inset-bottom,0px) + 10px)",
+      right:14,zIndex:30,
+      background:"var(--sf)",borderRadius:50,
+      boxShadow:"var(--sh-md)",
+      display:"flex",alignItems:"center",gap:8,
+      padding:"8px 14px 8px 10px",
+      border:"1px solid var(--border)",
+      animation:"introIn .3s ease",
+    }}>
+      <span style={{fontSize:16,animation:"hb 2s ease infinite"}}>🎵</span>
+      <span style={{fontSize:12,fontWeight:600,color:"var(--ink)",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+        Intro music
+      </span>
+      <button onClick={onStop} style={{background:"var(--rose)",border:"none",borderRadius:50,width:26,height:26,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,color:"var(--accent)"}}>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+      </button>
     </div>
   );
 }
@@ -1541,7 +1801,11 @@ function BottomNav({page,nav,names}){
 export default function App(){
   // NFC gate
   const[nfcOk,setNfcOk]=useState(false);
+  const[bioOk,setBioOk]=useState(false);
   const[showIntro,setShowIntro]=useState(false);
+  // Intro music
+  const audioRef=useRef(null);
+  const[musicPlaying,setMusicPlaying]=useState(false);
   // Auth gate
   const[user,setUser]=useState(()=>{ const u=gs("auth_user",null); return u&&(Date.now()-u.ts<7*86400000)?u:null; });
   // App state
@@ -1560,9 +1824,6 @@ export default function App(){
 
   // Init Firebase from saved config
   useEffect(()=>{ if(fbApiKey&&fbDbUrl){FIREBASE_API_KEY=fbApiKey;FIREBASE_DB_URL=fbDbUrl;setSynced(true);} },[fbApiKey,fbDbUrl]);
-  // Touch NFC timestamp while app is active
-  useEffect(()=>{ const t=setInterval(nfcTouch,5000);return()=>clearInterval(t); },[]);
-
   const setTheme=v=>{setThemeState(v);};
   const setBgImage=v=>{setBgImageState(v);};
   const setMoodEmojis=v=>setMoodEmojisState(v);
@@ -1585,14 +1846,40 @@ export default function App(){
   // ── Gates ──────────────────────────────────
   const handleNfcPass=()=>{
     setNfcOk(true);
+    // Intro check happens after biometric, not here
+  };
+  const startIntroMusic=()=>{
+    if(!gs('music_enabled',false))return;
+    const b64=gs('music_file_b64',null);
+    if(!b64)return;
+    try{
+      if(!audioRef.current)audioRef.current=new Audio();
+      audioRef.current.src=b64;
+      audioRef.current.loop=false;
+      audioRef.current.volume=1;
+      audioRef.current.play()
+        .then(()=>setMusicPlaying(true))
+        .catch(()=>{}); // autoplay blocked — silently fail
+    }catch(e){}
+  };
+
+  const stopMusic=()=>{
+    if(audioRef.current){audioRef.current.pause();audioRef.current.currentTime=0;}
+    setMusicPlaying(false);
+  };
+
+  const handleBioPass=()=>{
+    setBioOk(true);
     const seenVersion=gs('us_intro_version','');
     const isFirstTime=!seenVersion;
     const wantsIntro=gs('show_intro_on_scan',false);
     const isUpdate=seenVersion&&seenVersion!==APP_VERSION;
-    // Show intro if: first time ever, or user toggled it on, or there's a new version
-    if(isFirstTime||wantsIntro||isUpdate) setShowIntro(true);
+    if(isFirstTime||wantsIntro||isUpdate)setShowIntro(true);
+    // Start intro music — user gesture from NFC/biometric allows autoplay
+    setTimeout(startIntroMusic,300);
   };
   if(!nfcOk)return(<div className="us-app"><style>{buildCSS(theme,bgImage)}</style><NFCGate onPass={handleNfcPass}/></div>);
+  if(!bioOk)return(<div className="us-app"><style>{buildCSS(theme,bgImage)}</style><BiometricGate onPass={handleBioPass} onSkip={handleBioPass}/></div>);
   if(!user)return(<div className="us-app"><style>{buildCSS(theme,bgImage)}</style><AuthScreen
     onAuth={onAuth}
     initFbKey={fbApiKey}
@@ -1611,6 +1898,7 @@ export default function App(){
   return(
     <div className="us-app">
       {showIntro&&<IntroScreen onDone={()=>setShowIntro(false)}/>}
+      <FloatingMusicPlayer audioRef={audioRef} playing={musicPlaying} onStop={stopMusic}/>
       <header className="us-hdr">
         {isHome
           ?<><div className="logo">us.</div><div style={{display:"flex",alignItems:"center",gap:8}}>{synced&&<span style={{fontSize:9,fontWeight:700,color:"var(--muted)",display:"flex",alignItems:"center"}}><span className="sync-dot on"/>LIVE</span>}<button style={{background:"none",border:"none",cursor:"pointer",fontSize:10,fontWeight:700,letterSpacing:".12em",textTransform:"uppercase",color:"var(--slate)"}} onClick={()=>setPage("gallery")}>GALLERY</button></div></>
@@ -1623,7 +1911,7 @@ export default function App(){
       {page==="map"&&<MapPage pageName={names.map||DEF_NAMES.map} setPageName={makeNameSetter("map")}/>}
       {page==="gallery"&&<GalleryPage pageName={names.gallery||DEF_NAMES.gallery} setPageName={makeNameSetter("gallery")} myName={myName}/>}
       {page==="notes"&&<NotesPage pageName={names.notes||DEF_NAMES.notes} setPageName={makeNameSetter("notes")}/>}
-      {page==="settings"&&<SettingsPage pageName={names.settings||DEF_NAMES.settings} setPageName={makeNameSetter("settings")} theme={theme} setTheme={setTheme} bgImage={bgImage} setBgImage={setBgImage} names={names} setNames={setNames} myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} fbApiKey={fbApiKey} setFbApiKey={setFbApiKey} fbDbUrl={fbDbUrl} setFbDbUrl={setFbDbUrl} synced={synced} onReplayIntro={()=>setShowIntro(true)}/>}
+      {page==="settings"&&<SettingsPage pageName={names.settings||DEF_NAMES.settings} setPageName={makeNameSetter("settings")} theme={theme} setTheme={setTheme} bgImage={bgImage} setBgImage={setBgImage} names={names} setNames={setNames} myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} fbApiKey={fbApiKey} setFbApiKey={setFbApiKey} fbDbUrl={fbDbUrl} setFbDbUrl={setFbDbUrl} synced={synced} onReplayIntro={()=>setShowIntro(true)} onTestMusic={startIntroMusic} musicPlaying={musicPlaying} stopMusic={stopMusic}/>}
       <BottomNav page={page} nav={setPage} names={names}/>
     </div>
   );

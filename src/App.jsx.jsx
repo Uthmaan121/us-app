@@ -743,8 +743,6 @@ function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
   );
 
   // ── Step 2: Normal login + OTP reset ──────────────────
-  const[resetStep,setResetStep]=useState("form");
-  const[resetBusy,setResetBusy]=useState(false);
   const[resetToken,setResetToken]=useState("");
   const[resetOtp,setResetOtp]=useState("");
   const[newPw,setNewPw]=useState("");

@@ -701,9 +701,10 @@ class ErrorBoundary extends React.Component{
    AUTH SCREEN
 ═══════════════════════════════════════════ */
 function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
-  const[fbKey,setFbKey]=useState(initFbKey||"");
-  const[fbUrl,setFbUrl]=useState(initFbUrl||"");
-  const[fbReady,setFbReady]=useState(!!(initFbKey&&initFbUrl));
+  // Hardcode your actual credentials here so they are permanently saved in the code
+  const[fbKey,setFbKey]=useState("AIzaSyAc1LN7uRNdrSkejFXdjh8CiCQJPCIYU1A"); 
+  const[fbUrl,setFbUrl]=useState("https://ustag-22e9c-default-rtdb.firebaseio.com");
+  const[fbReady,setFbReady]=useState(true); // Always true so the setup screen is bypassed
   const[mode,setMode]=useState("signin");
   const[email,setEmail]=useState("");
   const[pw,setPw]=useState("");

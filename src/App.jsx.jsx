@@ -1,5 +1,5 @@
 
-import react, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 
 /* ════════════════════════════════════════════
    CONFIG  — fill in your Firebase details

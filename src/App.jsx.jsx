@@ -2187,8 +2187,7 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
       {page==="map"&&<MapPage pageName={names.map||DEF_NAMES.map} setPageName={makeNameSetter("map")}/>}
       {page==="gallery"&&<GalleryPage pageName={names.gallery||DEF_NAMES.gallery} setPageName={makeNameSetter("gallery")} myName={myName}/>}
       {page==="notes"&&<NotesPage pageName={names.notes||DEF_NAMES.notes} setPageName={makeNameSetter("notes")}/>}
-      {page==="settings"&&<SettingsPage pageName={names.settings||DEF_NAMES.settings} setPageName={makeNameSetter("settings")} theme={theme} setTheme={setTheme} bgImage={bgImage} setBgImage={setBgImage} names={names} setNames={setNames} myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} fbApiKey={fbApiKey} setFbApiKey={setFbApiKey} fbDbUrl={fbDbUrl} setFbDbUrl={setFbDbUrl} synced={synced} onReplayIntro={()=>setShowIntro(true)} onTestMusic={startIntroMusic} musicPlaying={musicPlaying} stopMusic={stopMusic}/>}
-      <BottomNav page={page} nav={setPage} names={names}/>
+      {page==="settings"&&<SettingsPage pageName={names.settings||DEF_NAMES.settings} setPageName={makeNameSetter("settings")} theme={theme} setTheme={setTheme} bgImage={bgImage} setBgImage={setBgImage} names={names} setNames={setNames} myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} fbApiKey={fbApiKey} setFbApiKey={setFbApiKey} fbDbUrl={fbDbUrl} setFbDbUrl={setFbDbUrl} synced={synced} onReplayIntro={()=>setShowIntro(true)} onTestMusic={startIntroMusic} musicPlaying={musicPlaying} stopMusic={stopMusic} user={user}/>}      <BottomNav page={page} nav={setPage} names={names}/>
     </div>
     </ErrorBoundary>
   );

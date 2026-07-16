@@ -710,6 +710,8 @@ function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
   const[err,setErr]=useState("");
   const[busy,setBusy]=useState(false);
   const[regCount,setRegCount]=useState(null);
+  const[resetMode,setResetMode]=useState(false);
+  const[resetStep,setResetStep]=useState("form");
 
   useEffect(()=>{
     if(fbReady) dbGet("meta/registered_count").then(v=>setRegCount(v||0));

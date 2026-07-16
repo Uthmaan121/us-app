@@ -1546,27 +1546,33 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
   
 // Pull the music file from the cloud automatically once logged in
   useEffect(() => {
-    // Check if we have an active auth user in local storage
-    const auth = gs("auth_user", null);
-    if (!auth) return; // Wait until they are logged in
+    // 1. Only run if we are fully authenticated and synced
+    if (!synced) return;
 
     let unsubB64 = null;
     let unsubName = null;
 
     try {
-      unsubB64 = dbListen("room/music_file_b64", v => {
-        if (v) {
-          ss("music_file_b64", v);
-          setMusicHasFile(true);
-        }
-      });
+      // 2. Only download from the cloud if our local storage is empty
+      const localB64 = gs("music_file_b64", null);
+      if (!localB64) {
+        unsubB64 = dbListen("room/music_file_b64", v => {
+          if (v) {
+            ss("music_file_b64", v);
+            setMusicHasFile(true);
+          }
+        });
+      }
 
-      unsubName = dbListen("room/music_file_name", v => {
-        if (v) {
-          ss("music_file_name", v);
-          setMusicFileName(v);
-        }
-      });
+      const localName = gs("music_file_name", "");
+      if (!localName) {
+        unsubName = dbListen("room/music_file_name", v => {
+          if (v) {
+            ss("music_file_name", v);
+            setMusicFileName(v);
+          }
+        });
+      }
     } catch (e) {
       console.log("Database fetch failed on startup:", e.message);
     }
@@ -1575,8 +1581,8 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
       if (typeof unsubB64 === 'function') unsubB64();
       if (typeof unsubName === 'function') unsubName();
     };
-  }, [localStorage.getItem("auth_user")]); // Triggers instantly when user logs in!
-  
+  }, [synced]); // React guarantees this runs the exact moment 'synced' changes to true!
+
   const saveSpotify=()=>{ss("music_spotify_url",spotifyUrl);setMusicMsg("Spotify URL saved.");};
   const[nameDraft,setNameDraft]=useState({...names});
   const[sN,setSN]=useState(myName);

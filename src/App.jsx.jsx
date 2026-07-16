@@ -1,6 +1,45 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
+// --- INDEXEDDB STORAGE ENGINE ---
+const DB_NAME = "MusicAppDB";
+const STORE_NAME = "audioStore";
+const FILE_KEY = "saved_mp3";
 
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME);
+      }
+    };
+    request.onsuccess = (e) => resolve(e.target.result);
+    request.onerror = (e) => reject(e.target.error);
+  });
+}
+
+async function saveMP3(file) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, "readwrite");
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.put(file, FILE_KEY);
+    request.onsuccess = () => resolve();
+    request.onerror = (e) => reject(e.target.error);
+  });
+}
+
+async function getMP3() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, "readonly");
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.get(FILE_KEY);
+    request.onsuccess = (e) => resolve(e.target.result);
+    request.onerror = (e) => reject(e.target.error);
+  });
+}
 /* ════════════════════════════════════════════
    CONFIG  — fill in your Firebase details
 ════════════════════════════════════════════ */
@@ -1485,19 +1524,35 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
 
   const toggleMusic=v=>{setMusicEnabled(v);ss("music_enabled",v);};
 
-  const handleMusicUpload=e=>{
-    const f=e.target.files[0];if(!f)return;
-    if(f.size>8*1024*1024){setMusicMsg("File too large. Max 8MB (keep it to a short intro clip).");return;}
-    const r=new FileReader();
-    r.onload=ev=>{
-      ss("music_file_b64",ev.target.result);
-      ss("music_file_name",f.name);
-      setMusicHasFile(true);
-      setMusicFileName(f.name);
-      setMusicMsg("Uploaded: "+f.name);
-    };
-    r.readAsDataURL(f);
-  };
+const handleMusicUpload = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  // Check file size (max 8MB)
+  if (file.size > 8 * 1024 * 1024) {
+    alert("File is too large! Please choose an audio file under 8MB.");
+    return;
+  }
+
+  try {
+    // 1. Save permanently to the browser database
+    await saveMP3(file);
+
+    // 2. Create a temporary playable url
+    const url = URL.createObjectURL(file);
+    if (audioRef && audioRef.current) {
+      audioRef.current.src = url;
+    }
+
+    // 3. Update the app's visual state
+    setMusicHasFile(true);
+    setMusicFileName(file.name);
+    setMusicMsg("Music saved permanently to your device!");
+  } catch (err) {
+    console.error("Error saving music file:", err);
+    alert("Could not save the audio file.");
+  }
+};
 
   const clearMusicFile=()=>{
     ss("music_file_b64",null);ss("music_file_name","");
@@ -1989,13 +2044,65 @@ function BottomNav({page,nav,names}){
    ROOT APP
 ═══════════════════════════════════════════ */
 export default function App(){
+  const audioRef = React.useRef(null);
+const [audioUrl, setAudioUrl] = React.useState(null);
+
+// Check storage on start and load the saved song
+React.useEffect(() => {
+  async function loadAudio() {
+    try {
+      const fileBlob = await getMP3();
+      if (fileBlob) {
+        const url = URL.createObjectURL(fileBlob);
+        setAudioUrl(url);
+      }
+    } catch (err) {
+      console.error("Failed to load music:", err);
+    }
+  }
+  loadAudio();
+}, []);
+const handleFileChange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  try {
+    await saveMP3(file); // Saves to hard drive
+    const url = URL.createObjectURL(file); // Makes it playable
+    setAudioUrl(url); // Tells the app to use it
+    alert("Song saved successfully!");
+  } catch (err) {
+    console.error("Error saving file:", err);
+    alert("Could not save song.");
+  }
+};
+// Load the saved song from the computer's hard drive on startup
+React.useEffect(() => {
+  async function loadAudio() {
+    try {
+      const savedFile = await getMP3();
+      if (savedFile) {
+        // This is a browser trick to make the raw file playable as a link
+        const url = URL.createObjectURL(savedFile);
+        
+        // 1. Tell your app's audio element to use this file url
+        if (audioRef && audioRef.current) {
+          audioRef.current.src = url;
+        }
+        // 2. Turn on the state so the app knows a file is loaded
+        setMusicHasFile(true);
+        setMusicFileName(savedFile.name);
+      }
+    } catch (err) {
+      console.error("Failed to load music from storage:", err);
+    }
+  }
+  loadAudio();
+}, []);
   // NFC gate
   const[nfcOk,setNfcOk]=useState(false);
   const[bioOk,setBioOk]=useState(false);
   const[showIntro,setShowIntro]=useState(false);
-  // Intro music
-  const audioRef=useRef(null);
-  const[musicPlaying,setMusicPlaying]=useState(false);
   // Auth gate
   const[user,setUser]=useState(()=>{ const u=gs("auth_user",null); return u&&(Date.now()-u.ts<7*86400000)?u:null; });
   // App state
@@ -2105,6 +2212,14 @@ export default function App(){
       {page==="notes"&&<NotesPage pageName={names.notes||DEF_NAMES.notes} setPageName={makeNameSetter("notes")}/>}
       {page==="settings"&&<SettingsPage pageName={names.settings||DEF_NAMES.settings} setPageName={makeNameSetter("settings")} theme={theme} setTheme={setTheme} bgImage={bgImage} setBgImage={setBgImage} names={names} setNames={setNames} myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} fbApiKey={fbApiKey} setFbApiKey={setFbApiKey} fbDbUrl={fbDbUrl} setFbDbUrl={setFbDbUrl} synced={synced} onReplayIntro={()=>setShowIntro(true)} onTestMusic={startIntroMusic} musicPlaying={musicPlaying} stopMusic={stopMusic}/>}
       <BottomNav page={page} nav={setPage} names={names}/>
+    {audioUrl && (
+  <audio 
+    ref={audioRef} 
+    src={audioUrl} 
+    loop 
+    style={{ display: 'none' }} 
+  />
+)}
     </div>
     </ErrorBoundary>
   );

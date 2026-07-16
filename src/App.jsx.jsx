@@ -1481,34 +1481,83 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
   onReplayIntro,onTestMusic,musicPlaying,stopMusic}){
 
   const[bgDraft,setBgDraft]=useState(bgImage||"");
-  // Intro music
-  const[musicEnabled,setMusicEnabled]=useState(()=>gs("music_enabled",false));
-  const[musicHasFile,setMusicHasFile]=useState(()=>!!gs("music_file_b64",null));
-  const[musicFileName,setMusicFileName]=useState(()=>gs("music_file_name",""));
-  const[spotifyUrl,setSpotifyUrl]=useState(()=>gs("music_spotify_url",""));
-  const[musicMsg,setMusicMsg]=useState("");
-  const musicFileRef=useRef();
+  
+// Intro music
+  const [musicEnabled, setMusicEnabled] = useState(() => gs("music_enabled", false));
+  const [musicHasFile, setMusicHasFile] = useState(() => !!gs("music_file_b64", null));
+  const [musicFileName, setMusicFileName] = useState(() => gs("music_file_name", ""));
+  const [spotifyUrl, setSpotifyUrl] = useState(() => gs("music_spotify_url", ""));
+  const [musicMsg, setMusicMsg] = useState("");
+  const musicFileRef = useRef();
 
-  const toggleMusic=v=>{setMusicEnabled(v);ss("music_enabled",v);};
+  const toggleMusic = v => { setMusicEnabled(v); ss("music_enabled", v); };
 
-  const handleMusicUpload=e=>{
-    const f=e.target.files[0];if(!f)return;
-    if(f.size>8*1024*1024){setMusicMsg("File too large. Max 8MB (keep it to a short intro clip).");return;}
-    const r=new FileReader();
-    r.onload=ev=>{
-      ss("music_file_b64",ev.target.result);
-      ss("music_file_name",f.name);
-      setMusicHasFile(true);
-      setMusicFileName(f.name);
-      setMusicMsg("Uploaded: "+f.name);
+  const handleMusicUpload = e => {
+    const f = e.target.files[0]; if (!f) return;
+    if (f.size > 8 * 1024 * 1024) { 
+      setMusicMsg("File too large. Max 8MB (keep it to a short intro clip)."); 
+      return; 
+    }
+    const r = new FileReader();
+    r.onload = ev => {
+      const b64Data = ev.target.result;
+      
+      // 1. Save locally so it plays instantly
+      ss("music_file_b64", b64Data);
+      ss("music_file_name", f.name);
+      
+      // 2. Save to your shared Firebase DB using your existing dbWrite
+      try {
+        dbWrite("room/music_file_b64", b64Data);
+        dbWrite("room/music_file_name", f.name);
+        
+        setMusicHasFile(true);
+        setMusicFileName(f.name);
+        setMusicMsg("Uploaded & saved to Cloud: " + f.name);
+      } catch (err) {
+        setMusicMsg("Saved locally, but Cloud sync failed.");
+      }
     };
     r.readAsDataURL(f);
   };
 
-  const clearMusicFile=()=>{
-    ss("music_file_b64",null);ss("music_file_name","");
-    setMusicHasFile(false);setMusicFileName("");setMusicMsg("Removed.");
+  const clearMusicFile = () => {
+    // 1. Clear locally
+    ss("music_file_b64", null);
+    ss("music_file_name", "");
+    
+    // 2. Clear from Cloud
+    try {
+      dbWrite("room/music_file_b64", null);
+      dbWrite("room/music_file_name", null);
+    } catch {}
+
+    setMusicHasFile(false);
+    setMusicFileName("");
+    setMusicMsg("Removed.");
   };
+  
+// Automatically pull the music file from the cloud if the local cache is empty
+  useEffect(() => {
+    const unsubB64 = dbListen("room/music_file_b64", v => {
+      if (v) {
+        ss("music_file_b64", v);
+        setMusicHasFile(true);
+      }
+    });
+
+    const unsubName = dbListen("room/music_file_name", v => {
+      if (v) {
+        ss("music_file_name", v);
+        setMusicFileName(v);
+      }
+    });
+
+    return () => {
+      if (typeof unsubB64 === 'function') unsubB64();
+      if (typeof unsubName === 'function') unsubName();
+    };
+  }, []);
 
   const saveSpotify=()=>{ss("music_spotify_url",spotifyUrl);setMusicMsg("Spotify URL saved.");};
   const[nameDraft,setNameDraft]=useState({...names});

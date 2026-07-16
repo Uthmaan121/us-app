@@ -1546,42 +1546,46 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
   
 // Pull the music file from the cloud automatically once logged in
   useEffect(() => {
-    // 1. Only run if we are fully authenticated and synced
-    if (!synced) return;
+    // 1. If we don't have an active login session, wait.
+    const auth = gs("auth_user", null);
+    if (!auth) return;
 
     let unsubB64 = null;
     let unsubName = null;
 
-    try {
-      // 2. Only download from the cloud if our local storage is empty
-      const localB64 = gs("music_file_b64", null);
-      if (!localB64) {
-        unsubB64 = dbListen("room/music_file_b64", v => {
-          if (v) {
-            ss("music_file_b64", v);
-            setMusicHasFile(true);
-          }
-        });
-      }
+    // 2. Introduce a 1-second delay to let Firebase Auth resolve 
+    // and prevent premature unauthorized REST requests.
+    const delayTimer = setTimeout(() => {
+      try {
+        // Only fetch if we are actually missing the local cache
+        if (!gs("music_file_b64", null)) {
+          unsubB64 = dbListen("room/music_file_b64", v => {
+            if (v) {
+              ss("music_file_b64", v);
+              setMusicHasFile(true);
+            }
+          });
+        }
 
-      const localName = gs("music_file_name", "");
-      if (!localName) {
-        unsubName = dbListen("room/music_file_name", v => {
-          if (v) {
-            ss("music_file_name", v);
-            setMusicFileName(v);
-          }
-        });
+        if (!gs("music_file_name", "")) {
+          unsubName = dbListen("room/music_file_name", v => {
+            if (v) {
+              ss("music_file_name", v);
+              setMusicFileName(v);
+            }
+          });
+        }
+      } catch (e) {
+        console.log("Database fetch failed on startup:", e.message);
       }
-    } catch (e) {
-      console.log("Database fetch failed on startup:", e.message);
-    }
+    }, 1000);
 
     return () => {
+      clearTimeout(delayTimer);
       if (typeof unsubB64 === 'function') unsubB64();
       if (typeof unsubName === 'function') unsubName();
     };
-  }, [synced]); // React guarantees this runs the exact moment 'synced' changes to true!
+  }, [synced]); // Triggers immediately when the app switches to "synced: true" on login!
 
   const saveSpotify=()=>{ss("music_spotify_url",spotifyUrl);setMusicMsg("Spotify URL saved.");};
   const[nameDraft,setNameDraft]=useState({...names});

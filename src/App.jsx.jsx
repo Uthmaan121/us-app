@@ -6,7 +6,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 ════════════════════════════════════════════ */
 const NFC_TOKEN     = "8f4a2b7c1d3e9f5a6b8c0d4e1f2a3b5c"; // ← write this onto your NFC tag
 const ALLOWED_EMAILS= ["hyphen080@gmail.com","malikareebah157@gmail.com"];
-const MAX_USERS     = 2;
+const MAX_USERS     = 5;
 const DEF_START     = "2026-04-14";
 
 // ← paste your Firebase Web API key & DB URL in Settings, or hardcode here:

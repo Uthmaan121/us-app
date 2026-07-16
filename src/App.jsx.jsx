@@ -1476,7 +1476,7 @@ function NotesPage({pageName,setPageName}){
 /* ═══════════════════════════════════════════
    SETTINGS PAGE
 ═══════════════════════════════════════════ */
-function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,names,setNames,
+function SettingsPage({user, pageName,setPageName,theme,setTheme,bgImage,setBgImage,names,setNames,
   myName,theirName,startDate,onSettings,fbApiKey,setFbApiKey,fbDbUrl,setFbDbUrl,synced,
   onReplayIntro,onTestMusic,musicPlaying,stopMusic}){
 

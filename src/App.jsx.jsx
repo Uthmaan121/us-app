@@ -10,8 +10,8 @@ const MAX_USERS     = 2;
 const DEF_START     = "2026-04-14";
 
 // ← paste your Firebase Web API key & DB URL in Settings, or hardcode here:
-let FIREBASE_API_KEY = "";
-let FIREBASE_DB_URL  = "";
+let FIREBASE_API_KEY = "AIzaSyAc1LN7uRNdrSkejFXdjh8CiCQJPCIYU1A";
+let FIREBASE_DB_URL  = "https://ustag-22e9c-default-rtdb.firebaseio.com";
 
 /* ── Firebase Auth REST ─────────────────────────────────── */
 const authUrl = endpoint =>
@@ -712,6 +712,12 @@ function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
   const[regCount,setRegCount]=useState(null);
   const[resetMode,setResetMode]=useState(false);
   const[resetStep,setResetStep]=useState("form");
+  const[resetToken,setResetToken]=useState("");
+  const[resetOtp,setResetOtp]=useState("");
+  const[newPw,setNewPw]=useState("");
+  const[confirmPw,setConfirmPw]=useState("");
+  const[resetEmail,setResetEmail]=useState("");
+  const[resetBusy,setResetBusy]=useState(false);
 
   useEffect(()=>{
     if(fbReady) dbGet("meta/registered_count").then(v=>setRegCount(v||0));
@@ -725,6 +731,10 @@ function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
     setFbReady(true);
     setErr("");
   };
+
+  useEffect(()=>{
+    if(fbReady) dbGet("meta/registered_count").then(v=>setRegCount(v||0));
+  },[fbReady]);
 
   // ── Step 1: Firebase not set up yet ─────────────────────
   if(!fbReady) return(
@@ -743,11 +753,6 @@ function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
   );
 
   // ── Step 2: Normal login + OTP reset ──────────────────
-  const[resetToken,setResetToken]=useState("");
-  const[resetOtp,setResetOtp]=useState("");
-  const[newPw,setNewPw]=useState("");
-  const[confirmPw,setConfirmPw]=useState("");
-
   const sendOtp=async()=>{
     if(!resetEmail.trim()){setErr("Enter your email first.");return;}
     setResetBusy(true);setErr("");

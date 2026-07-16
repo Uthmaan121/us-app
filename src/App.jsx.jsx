@@ -662,6 +662,42 @@ function NFCGate({onPass}){
 }
 
 /* ═══════════════════════════════════════════
+   ERROR BOUNDARY
+═══════════════════════════════════════════ */
+class ErrorBoundary extends React.Component{
+  constructor(p){super(p);this.state={err:null};}
+  static getDerivedStateFromError(e){return{err:e};}
+  render(){
+    if(this.state.err){
+      return(
+        <div style={{padding:32,textAlign:"center",fontFamily:"Inter,sans-serif",
+          background:"#FCF0EC",height:"100dvh",display:"flex",flexDirection:"column",
+          alignItems:"center",justifyContent:"center",gap:12}}>
+          <div style={{fontSize:40}}>💔</div>
+          <h2 style={{fontFamily:"Georgia,serif",fontStyle:"italic",fontSize:22,color:"#1A1512"}}>
+            Something went wrong
+          </h2>
+          <p style={{fontSize:13,color:"#7A6560",maxWidth:280,lineHeight:1.7}}>
+            {this.state.err.message||"Unknown error"}
+          </p>
+          <button onClick={()=>this.setState({err:null})}
+            style={{marginTop:8,padding:"11px 22px",background:"#C45450",color:"#fff",
+              border:"none",borderRadius:50,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+            Try again
+          </button>
+          <button onClick={()=>window.location.reload()}
+            style={{padding:"9px 20px",background:"none",color:"#C45450",border:"1px solid #C45450",
+              borderRadius:50,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+            Reload app
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+/* ═══════════════════════════════════════════
    AUTH SCREEN
 ═══════════════════════════════════════════ */
 function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
@@ -1755,6 +1791,160 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
 
 
 /* ═══════════════════════════════════════════
+   CONFETTI
+═══════════════════════════════════════════ */
+function Confetti(){
+  const pieces=Array.from({length:44},(_,i)=>{
+    const colors=["#C45450","#F3DDD5","#FFD700","#FF85A1","#85D1FF","#A8F0A8","#E8A8F0"];
+    return{id:i,left:Math.random()*100,delay:Math.random()*2.4,dur:2+Math.random()*2,
+      color:colors[Math.floor(Math.random()*colors.length)],size:5+Math.random()*7,round:Math.random()>.5};
+  });
+  return(
+    <div style={{position:"fixed",inset:0,pointerEvents:"none",overflow:"hidden",zIndex:200}}>
+      {pieces.map(p=>(
+        <div key={p.id} style={{
+          position:"absolute",left:`${p.left}%`,top:-20,
+          width:p.size,height:p.size,background:p.color,
+          borderRadius:p.round?"50%":"3px",
+          animation:`confettiFall ${p.dur}s ${p.delay}s linear infinite`,
+        }}/>
+      ))}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   BIRTHDAY CARD
+═══════════════════════════════════════════ */
+function BirthdayCard(){
+  function daysUntil(day,month){
+    const now=new Date();
+    let next=new Date(now.getFullYear(),month-1,day);
+    if(next<=now)next.setFullYear(now.getFullYear()+1);
+    return Math.ceil((next-now)/86400000);
+  }
+  function isToday(day,month){const n=new Date();return n.getDate()===day&&n.getMonth()+1===month;}
+  function getAge(day,month,year){
+    const n=new Date();let age=n.getFullYear()-year;
+    if(n.getMonth()+1<month||(n.getMonth()+1===month&&n.getDate()<day))age--;
+    return age;
+  }
+  const pad=n=>String(n).padStart(2,"0");
+  const fmtD=ts=>new Date(ts).toLocaleDateString("en-GB",{day:"numeric",month:"short"});
+  const fmtDL=ts=>new Date(ts).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"long"});
+  const fmtFull=ts=>new Date(ts).toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+
+  const todayBday=BIRTHDAYS.find(b=>isToday(b.day,b.month));
+  const[showConf,setShowConf]=useState(!!todayBday);
+  useEffect(()=>{
+    if(!showConf)return;
+    const t=setTimeout(()=>setShowConf(false),8000);
+    return()=>clearTimeout(t);
+  },[showConf]);
+
+  if(todayBday)return(
+    <>
+      {showConf&&<Confetti/>}
+      <div className="bday-card-today">
+        <div style={{fontSize:"clamp(32px,9vw,46px)",marginBottom:10,animation:"heartPulse 1.2s ease infinite"}}>
+          {todayBday.emoji} 🎂 {todayBday.emoji}
+        </div>
+        <h3 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(18px,5.5vw,24px)",fontWeight:600,color:"var(--ink)",marginBottom:8}}>
+          Happy Birthday {todayBday.name}! 🎉
+        </h3>
+        <p style={{fontSize:13,color:"var(--slate)",lineHeight:1.7,maxWidth:280,margin:"0 auto 10px"}}>
+          {todayBday.msg}
+        </p>
+        <p style={{fontSize:11,color:"var(--muted)"}}>Turning {getAge(todayBday.day,todayBday.month,todayBday.year)+1} today 🌟</p>
+        <button style={{marginTop:12,background:"none",border:"none",cursor:"pointer",fontSize:12,color:"var(--accent)",fontWeight:600}}
+          onClick={()=>setShowConf(true)}>🎊 Celebrate again</button>
+      </div>
+    </>
+  );
+
+  return(
+    <div className="card">
+      <h3 className="card-title" style={{marginBottom:12}}>🎂 Birthdays</h3>
+      {BIRTHDAYS.map((b,i)=>{
+        const days=daysUntil(b.day,b.month);
+        const soon=days<=7;
+        return(
+          <div key={b.name} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+            padding:"10px 0",borderBottom:i<BIRTHDAYS.length-1?"1px solid var(--border)":"none"}}>
+            <div>
+              <span style={{fontSize:18,marginRight:8}}>{b.emoji}</span>
+              <span style={{fontWeight:600,fontSize:14,color:"var(--ink)"}}>{b.name}</span>
+              <span style={{fontSize:11,color:"var(--muted)",marginLeft:6}}>{b.day}/{b.month}/{b.year}</span>
+              {soon&&<span style={{fontSize:9,fontWeight:700,letterSpacing:".1em",textTransform:"uppercase",color:"var(--accent)",display:"block",marginTop:2}}>coming soon ✨</span>}
+            </div>
+            <div style={{textAlign:"right",flexShrink:0}}>
+              <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(17px,5vw,22px)",fontWeight:700,color:soon?"var(--accent)":"var(--ink)"}}>{days}</span>
+              <span style={{fontSize:11,color:"var(--muted)",marginLeft:3}}>days</span>
+              <div style={{fontSize:10,color:"var(--muted)"}}>turns {getAge(b.day,b.month,b.year)+1}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   INTRO SCREEN
+═══════════════════════════════════════════ */
+function IntroScreen({onDone}){
+  const[idx,setIdx]=useState(0);
+  const[animKey,setAnimKey]=useState(0);
+  const seenVersion=gs("us_intro_version","");
+  const isUpdate=seenVersion&&seenVersion!==APP_VERSION;
+  const whatNew=isUpdate?[{
+    emoji:"✨",title:"Something new.",
+    body:`us. has been updated to v${APP_VERSION}.
+
+New this version:
+• Birthday tracker with confetti
+• Welcome walkthrough
+• Intro music on unlock
+• Face ID / fingerprint lock
+• NFC closes on every refresh`,
+    sub:"Tap Next to see the full tour →",
+  }]:[];
+  const slides=[...whatNew,...INTRO_SLIDES];
+  const slide=slides[idx];
+  const isLast=idx===slides.length-1;
+  const next=()=>{
+    if(isLast){ss("us_intro_version",APP_VERSION);onDone();return;}
+    setIdx(i=>i+1);setAnimKey(k=>k+1);
+  };
+  const skip=()=>{ss("us_intro_version",APP_VERSION);onDone();};
+  return(
+    <div className="intro-screen">
+      <div style={{width:"100%",display:"flex",justifyContent:"flex-end",flexShrink:0}}>
+        {!isLast&&<button onClick={skip} style={{background:"none",border:"none",cursor:"pointer",
+          fontSize:12,fontWeight:600,color:"var(--muted)",letterSpacing:".06em"}}>SKIP</button>}
+      </div>
+      <div className="intro-slide" key={animKey}>
+        <div className="intro-emoji">{slide.emoji}</div>
+        <h2 className="intro-title">{slide.title}</h2>
+        <p className="intro-body" style={{whiteSpace:"pre-line"}}>{slide.body}</p>
+        {slide.sub&&<p className="intro-sub">{slide.sub}</p>}
+        {slide.tag&&<p className="intro-tag">{slide.tag}</p>}
+      </div>
+      <div className="intro-dots">
+        {slides.map((_,i)=><div key={i} className={`intro-dot${i===idx?" on":""}`}/>)}
+      </div>
+      <div className="intro-btns">
+        {idx>0&&<button className="btn-p" style={{background:"var(--rose)",color:"var(--ink)",flex:1}}
+          onClick={()=>{setIdx(i=>i-1);setAnimKey(k=>k+1);}}>← Back</button>}
+        <button className="btn-p" style={{flex:2}} onClick={next}>
+          {isLast?"Let us begin 💕":"Next →"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════
    FLOATING MUSIC PLAYER
 ═══════════════════════════════════════════ */
 function FloatingMusicPlayer({audioRef,playing,onStop}){
@@ -1830,11 +2020,11 @@ export default function App(){
   const setConnEmoji=v=>setConnEmojiState(v);
   const setNames=v=>setNamesState(v);
 
-  // CSS injection
+  // CSS injection — always keep head style in sync with theme
   useEffect(()=>{
-    const s=document.getElementById("us-css")||document.createElement("style");
-    s.id="us-css";s.textContent=buildCSS(theme,bgImage);
-    if(!document.getElementById("us-css"))document.head.appendChild(s);
+    let s=document.getElementById("us-css");
+    if(!s){s=document.createElement("style");s.id="us-css";document.head.appendChild(s);}
+    s.textContent=buildCSS(theme,bgImage);
   },[theme,bgImage]);
 
   const onSettings=({myName:n,theirName:t,startDate:s})=>{setMyName(n);setTheirName(t);setStartDate(s);ss("name_me",n);ss("name_them",t);ss("start_date",s);};
@@ -1878,9 +2068,9 @@ export default function App(){
     // Start intro music — user gesture from NFC/biometric allows autoplay
     setTimeout(startIntroMusic,300);
   };
-  if(!nfcOk)return(<div className="us-app"><style>{buildCSS(theme,bgImage)}</style><NFCGate onPass={handleNfcPass}/></div>);
-  if(!bioOk)return(<div className="us-app"><style>{buildCSS(theme,bgImage)}</style><BiometricGate onPass={handleBioPass} onSkip={handleBioPass}/></div>);
-  if(!user)return(<div className="us-app"><style>{buildCSS(theme,bgImage)}</style><AuthScreen
+  if(!nfcOk)return(<ErrorBoundary><div className="us-app"><style>{buildCSS(theme,bgImage)}</style><NFCGate onPass={handleNfcPass}/></div></ErrorBoundary>);
+  if(!bioOk)return(<ErrorBoundary><div className="us-app"><style>{buildCSS(theme,bgImage)}</style><BiometricGate onPass={handleBioPass} onSkip={handleBioPass}/></div></ErrorBoundary>);
+  if(!user)return(<ErrorBoundary><div className="us-app"><style>{buildCSS(theme,bgImage)}</style><AuthScreen
     onAuth={onAuth}
     initFbKey={fbApiKey}
     initFbUrl={fbDbUrl}
@@ -1893,10 +2083,12 @@ export default function App(){
       ss("fb_db_url",url);
       setSynced(true);
     }}
-  /></div>);
+  /></div>);</ErrorBoundary>
 
   return(
+    <ErrorBoundary>
     <div className="us-app">
+      <style>{buildCSS(theme,bgImage)}</style>
       {showIntro&&<IntroScreen onDone={()=>setShowIntro(false)}/>}
       <FloatingMusicPlayer audioRef={audioRef} playing={musicPlaying} onStop={stopMusic}/>
       <header className="us-hdr">
@@ -1914,5 +2106,6 @@ export default function App(){
       {page==="settings"&&<SettingsPage pageName={names.settings||DEF_NAMES.settings} setPageName={makeNameSetter("settings")} theme={theme} setTheme={setTheme} bgImage={bgImage} setBgImage={setBgImage} names={names} setNames={setNames} myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} fbApiKey={fbApiKey} setFbApiKey={setFbApiKey} fbDbUrl={fbDbUrl} setFbDbUrl={setFbDbUrl} synced={synced} onReplayIntro={()=>setShowIntro(true)} onTestMusic={startIntroMusic} musicPlaying={musicPlaying} stopMusic={stopMusic}/>}
       <BottomNav page={page} nav={setPage} names={names}/>
     </div>
+    </ErrorBoundary>
   );
 }

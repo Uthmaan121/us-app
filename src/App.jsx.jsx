@@ -1476,7 +1476,7 @@ function NotesPage({pageName,setPageName}){
 /* ═══════════════════════════════════════════
    SETTINGS PAGE
 ═══════════════════════════════════════════ */
-function SettingsPage({user, pageName,setPageName,theme,setTheme,bgImage,setBgImage,names,setNames,
+function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,names,setNames,
   myName,theirName,startDate,onSettings,fbApiKey,setFbApiKey,fbDbUrl,setFbDbUrl,synced,
   onReplayIntro,onTestMusic,musicPlaying,stopMusic}){
 
@@ -1486,6 +1486,16 @@ function SettingsPage({user, pageName,setPageName,theme,setTheme,bgImage,setBgIm
   const [musicEnabled, setMusicEnabled] = useState(() => gs("music_enabled", false));
   const [musicHasFile, setMusicHasFile] = useState(() => !!gs("music_file_b64", null));
   const [musicFileName, setMusicFileName] = useState(() => gs("music_file_name", ""));
+  useEffect(()=>{
+    if(!gs("music_file_b64",null)){
+        dbGet("room/music_file_b64").then(v=>{
+            if(v){ss("music_file_b64",v);setMusicHasFile(true);}
+        });
+        dbGet("room/music_file_name").then(v=>{
+            if(v){ss("music_file_name",v);setMusicFileName(v);}
+        });
+    }
+},[]);
   const [spotifyUrl, setSpotifyUrl] = useState(() => gs("music_spotify_url", ""));
   const [musicMsg, setMusicMsg] = useState("");
   const musicFileRef = useRef();
@@ -1506,6 +1516,9 @@ function SettingsPage({user, pageName,setPageName,theme,setTheme,bgImage,setBgIm
       ss("music_file_b64", b64Data);
       ss("music_file_name", f.name);
       
+      dbWrite("room/music_file_b64", ev.target.result);
+      dbWrite("room/music_file_name", f.name);
+
       setMusicMsg("Uploading to Cloud...");
 
       // 2. Save to Firebase and explicitly catch any errors
@@ -1592,23 +1605,6 @@ function SettingsPage({user, pageName,setPageName,theme,setTheme,bgImage,setBgIm
   const[sN,setSN]=useState(myName);
   const[sT,setST]=useState(theirName);
   const[sS,setSS]=useState(startDate);
-
-// Sync everything else from Cloud on login
-useEffect(() => {
-  if (!user) return; // Only sync if logged in
-
-  // Store the "unsub" functions so we can turn them off later
-  const unsubNotes = dbListen("room/notes", v => { if (v) ss("notes_key", v); });
-  const unsubGallery = dbListen("room/gallery", v => { if (v) ss("gallery_key", v); });
-  const unsubNames = dbListen("room/page_names", v => { if (v) ss("page_names", v); });
-
-  // CLEANUP: This turns off the listeners when the user logs out or the page unmounts
-  return () => {
-    if (typeof unsubNotes === 'function') unsubNotes();
-    if (typeof unsubGallery === 'function') unsubGallery();
-    if (typeof unsubNames === 'function') unsubNames();
-  };
-}, [user]);
 
   // Change PINs
   const[galDraft,setGalDraft]=useState("");
@@ -2108,7 +2104,7 @@ export default function App(){
   const[connEmoji,setConnEmojiState]=useSync("conn_emoji","💕");
   const[theme,setThemeState]=useSync("app_theme","blush");
   const[bgImage,setBgImageState]=useSync("app_bg",null);
-// Change "" to your actual Firebase credentials so they survive history clears!
+  // Change "" to your actual Firebase credentials so they survive history clears!
 const [fbApiKey, setFbApiKey] = useState(() => gs("fb_api_key", "AIzaSyAc1LN7uRNdrSkejFXdjh8CiCQJPCIYU1A"));
 const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9c-default-rtdb.firebaseio.com"));
   const[synced,setSynced]=useState(false);
@@ -2204,7 +2200,8 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
       {page==="map"&&<MapPage pageName={names.map||DEF_NAMES.map} setPageName={makeNameSetter("map")}/>}
       {page==="gallery"&&<GalleryPage pageName={names.gallery||DEF_NAMES.gallery} setPageName={makeNameSetter("gallery")} myName={myName}/>}
       {page==="notes"&&<NotesPage pageName={names.notes||DEF_NAMES.notes} setPageName={makeNameSetter("notes")}/>}
-      {page==="settings"&&<SettingsPage pageName={names.settings||DEF_NAMES.settings} setPageName={makeNameSetter("settings")} theme={theme} setTheme={setTheme} bgImage={bgImage} setBgImage={setBgImage} names={names} setNames={setNames} myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} fbApiKey={fbApiKey} setFbApiKey={setFbApiKey} fbDbUrl={fbDbUrl} setFbDbUrl={setFbDbUrl} synced={synced} onReplayIntro={()=>setShowIntro(true)} onTestMusic={startIntroMusic} musicPlaying={musicPlaying} stopMusic={stopMusic} user={user}/>}      <BottomNav page={page} nav={setPage} names={names}/>
+      {page==="settings"&&<SettingsPage pageName={names.settings||DEF_NAMES.settings} setPageName={makeNameSetter("settings")} theme={theme} setTheme={setTheme} bgImage={bgImage} setBgImage={setBgImage} names={names} setNames={setNames} myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} fbApiKey={fbApiKey} setFbApiKey={setFbApiKey} fbDbUrl={fbDbUrl} setFbDbUrl={setFbDbUrl} synced={synced} onReplayIntro={()=>setShowIntro(true)} onTestMusic={startIntroMusic} musicPlaying={musicPlaying} stopMusic={stopMusic}/>}
+      <BottomNav page={page} nav={setPage} names={names}/>
     </div>
     </ErrorBoundary>
   );

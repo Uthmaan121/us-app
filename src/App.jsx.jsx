@@ -1544,30 +1544,36 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
     setMusicMsg("Removed.");
   };
   
-// Automatically pull the music file from the cloud once the user is successfully logged in
+// Pull the music file from the cloud automatically once the database is active
   useEffect(() => {
-    // Stop and wait if the user isn't authenticated yet
-    if (!user) return;
+    let unsubB64 = null;
+    let unsubName = null;
 
-    const unsubB64 = dbListen("room/music_file_b64", v => {
-      if (v) {
-        ss("music_file_b64", v);
-        setMusicHasFile(true);
-      }
-    });
+    try {
+      unsubB64 = dbListen("room/music_file_b64", v => {
+        if (v) {
+          ss("music_file_b64", v);
+          setMusicHasFile(true);
+        }
+      });
 
-    const unsubName = dbListen("room/music_file_name", v => {
-      if (v) {
-        ss("music_file_name", v);
-        setMusicFileName(v);
-      }
-    });
+      unsubName = dbListen("room/music_file_name", v => {
+        if (v) {
+          ss("music_file_name", v);
+          setMusicFileName(v);
+        }
+      });
+    } catch (e) {
+      // If we aren't logged in yet, the database listener will fail silently 
+      // instead of crashing the entire app with a white screen.
+      console.log("Database not ready yet:", e.message);
+    }
 
     return () => {
       if (typeof unsubB64 === 'function') unsubB64();
       if (typeof unsubName === 'function') unsubName();
     };
-  }, [user]); // Running this hook whenever 'user' state updates
+  }, [synced]); // Triggers as soon as the app connects/syncs with Firebase!
 
   const saveSpotify=()=>{ss("music_spotify_url",spotifyUrl);setMusicMsg("Spotify URL saved.");};
   const[nameDraft,setNameDraft]=useState({...names});

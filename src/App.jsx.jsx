@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 
 /* ════════════════════════════════════════════
-   CONFIG  — fill in your Firebase details
+   CONFIG  — fill in your Firebase detailss
 ════════════════════════════════════════════ */
 const NFC_TOKEN     = "8f4a2b7c1d3e9f5a6b8c0d4e1f2a3b5c"; // ← write this onto your NFC tag
 const ALLOWED_EMAILS= ["hyphen080@gmail.com","malikareebah157@gmail.com"];

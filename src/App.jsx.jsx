@@ -1585,7 +1585,7 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
       if (typeof unsubB64 === 'function') unsubB64();
       if (typeof unsubName === 'function') unsubName();
     };
-  }, [synced]); // Triggers immediately when the app switches to "synced: true" on login!
+  }, [synced, user]);
 
   const saveSpotify=()=>{ss("music_spotify_url",spotifyUrl);setMusicMsg("Spotify URL saved.");};
   const[nameDraft,setNameDraft]=useState({...names});
@@ -2091,8 +2091,9 @@ export default function App(){
   const[connEmoji,setConnEmojiState]=useSync("conn_emoji","💕");
   const[theme,setThemeState]=useSync("app_theme","blush");
   const[bgImage,setBgImageState]=useSync("app_bg",null);
-  const[fbApiKey,setFbApiKey]=useState(()=>gs("fb_api_key",""));
-  const[fbDbUrl,setFbDbUrl]=useState(()=>gs("fb_db_url",""));
+// Change "" to your actual Firebase credentials so they survive history clears!
+const [fbApiKey, setFbApiKey] = useState(() => gs("fb_api_key", "AIzaSyAc1LN7uRNdrSkejFXdjh8CiCQJPCIYU1A"));
+const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9c-default-rtdb.firebaseio.com"));
   const[synced,setSynced]=useState(false);
 
   // Init Firebase from saved config

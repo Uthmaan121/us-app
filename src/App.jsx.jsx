@@ -1481,7 +1481,7 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
   onReplayIntro,onTestMusic,musicPlaying,stopMusic}){
 
   const[bgDraft,setBgDraft]=useState(bgImage||"");
-  
+
 // Intro music
   const [musicEnabled, setMusicEnabled] = useState(() => gs("music_enabled", false));
   const [musicHasFile, setMusicHasFile] = useState(() => !!gs("music_file_b64", null));
@@ -1495,28 +1495,35 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
   const handleMusicUpload = e => {
     const f = e.target.files[0]; if (!f) return;
     if (f.size > 8 * 1024 * 1024) { 
-      setMusicMsg("File too large. Max 8MB (keep it to a short intro clip)."); 
+      alert("File too large. Max 8MB.");
       return; 
     }
     const r = new FileReader();
     r.onload = ev => {
       const b64Data = ev.target.result;
       
-      // 1. Save locally so it plays instantly
+      // 1. Save locally
       ss("music_file_b64", b64Data);
       ss("music_file_name", f.name);
       
-      // 2. Save to your shared Firebase DB using your existing dbWrite
-      try {
-        dbWrite("room/music_file_b64", b64Data);
-        dbWrite("room/music_file_name", f.name);
-        
+      setMusicMsg("Uploading to Cloud...");
+
+      // 2. Save to Firebase and explicitly catch any errors
+      Promise.all([
+        dbWrite("room/music_file_b64", b64Data),
+        dbWrite("room/music_file_name", f.name)
+      ])
+      .then(() => {
         setMusicHasFile(true);
         setMusicFileName(f.name);
         setMusicMsg("Uploaded & saved to Cloud: " + f.name);
-      } catch (err) {
-        setMusicMsg("Saved locally, but Cloud sync failed.");
-      }
+        alert("Success! Saved to Cloud.");
+      })
+      .catch(err => {
+        // This will pop up a window on your phone showing the exact database error
+        alert("Firebase Error: " + err.message);
+        setMusicMsg("Cloud save failed: " + err.message);
+      });
     };
     r.readAsDataURL(f);
   };

@@ -2083,7 +2083,7 @@ export default function App(){
       ss("fb_db_url",url);
       setSynced(true);
     }}
-  /></div>);</ErrorBoundary>
+  /></div></ErrorBoundary>
 
   return(
     <ErrorBoundary>

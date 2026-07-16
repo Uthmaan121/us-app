@@ -1544,8 +1544,11 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
     setMusicMsg("Removed.");
   };
   
-// Automatically pull the music file from the cloud if the local cache is empty
+// Automatically pull the music file from the cloud once the user is successfully logged in
   useEffect(() => {
+    // Stop and wait if the user isn't authenticated yet
+    if (!user) return;
+
     const unsubB64 = dbListen("room/music_file_b64", v => {
       if (v) {
         ss("music_file_b64", v);
@@ -1564,7 +1567,7 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
       if (typeof unsubB64 === 'function') unsubB64();
       if (typeof unsubName === 'function') unsubName();
     };
-  }, []);
+  }, [user]); // Running this hook whenever 'user' state updates
 
   const saveSpotify=()=>{ss("music_spotify_url",spotifyUrl);setMusicMsg("Spotify URL saved.");};
   const[nameDraft,setNameDraft]=useState({...names});

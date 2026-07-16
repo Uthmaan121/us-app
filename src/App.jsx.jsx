@@ -1544,8 +1544,12 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
     setMusicMsg("Removed.");
   };
   
-// Pull the music file from the cloud automatically once the database is active
+// Pull the music file from the cloud automatically once logged in
   useEffect(() => {
+    // Check if we have an active auth user in local storage
+    const auth = gs("auth_user", null);
+    if (!auth) return; // Wait until they are logged in
+
     let unsubB64 = null;
     let unsubName = null;
 
@@ -1564,17 +1568,15 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
         }
       });
     } catch (e) {
-      // If we aren't logged in yet, the database listener will fail silently 
-      // instead of crashing the entire app with a white screen.
-      console.log("Database not ready yet:", e.message);
+      console.log("Database fetch failed on startup:", e.message);
     }
 
     return () => {
       if (typeof unsubB64 === 'function') unsubB64();
       if (typeof unsubName === 'function') unsubName();
     };
-  }, [synced]); // Triggers as soon as the app connects/syncs with Firebase!
-
+  }, [localStorage.getItem("auth_user")]); // Triggers instantly when user logs in!
+  
   const saveSpotify=()=>{ss("music_spotify_url",spotifyUrl);setMusicMsg("Spotify URL saved.");};
   const[nameDraft,setNameDraft]=useState({...names});
   const[sN,setSN]=useState(myName);

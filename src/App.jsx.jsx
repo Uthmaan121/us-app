@@ -1593,6 +1593,23 @@ function SettingsPage({user, pageName,setPageName,theme,setTheme,bgImage,setBgIm
   const[sT,setST]=useState(theirName);
   const[sS,setSS]=useState(startDate);
 
+// Sync everything else from Cloud on login
+useEffect(() => {
+  if (!user) return; // Only sync if logged in
+
+  // Store the "unsub" functions so we can turn them off later
+  const unsubNotes = dbListen("room/notes", v => { if (v) ss("notes_key", v); });
+  const unsubGallery = dbListen("room/gallery", v => { if (v) ss("gallery_key", v); });
+  const unsubNames = dbListen("room/page_names", v => { if (v) ss("page_names", v); });
+
+  // CLEANUP: This turns off the listeners when the user logs out or the page unmounts
+  return () => {
+    if (typeof unsubNotes === 'function') unsubNotes();
+    if (typeof unsubGallery === 'function') unsubGallery();
+    if (typeof unsubNames === 'function') unsubNames();
+  };
+}, [user]);
+
   // Change PINs
   const[galDraft,setGalDraft]=useState("");
   const[notesDraft,setNotesDraft]=useState("");

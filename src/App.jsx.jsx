@@ -2084,7 +2084,7 @@ export default function App(){
       setSynced(true);
     }}
   /></div></ErrorBoundary>
-
+  );
   return(
     <ErrorBoundary>
     <div className="us-app">

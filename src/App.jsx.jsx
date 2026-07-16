@@ -1514,45 +1514,66 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
   onReplayIntro,onTestMusic,musicPlaying,stopMusic}){
 
   const[bgDraft,setBgDraft]=useState(bgImage||"");
-  // Intro music
-  const[musicEnabled,setMusicEnabled]=useState(()=>gs("music_enabled",false));
-  const[musicHasFile,setMusicHasFile]=useState(()=>!!gs("music_file_b64",null));
-  const[musicFileName,setMusicFileName]=useState(()=>gs("music_file_name",""));
-  const[spotifyUrl,setSpotifyUrl]=useState(()=>gs("music_spotify_url",""));
-  const[musicMsg,setMusicMsg]=useState("");
-  const musicFileRef=useRef();
+// Intro music
+  const [musicEnabled, setMusicEnabled] = useState(() => gs("music_enabled", false));
+  const [musicHasFile, setMusicHasFile] = useState(false); // We will set this when IndexedDB loads
+  const [musicFileName, setMusicFileName] = useState(() => gs("music_file_name", ""));
+  const [spotifyUrl, setSpotifyUrl] = useState(() => gs("music_spotify_url", ""));
+  const [musicMsg, setMusicMsg] = useState("");
+  const musicFileRef = useRef();
 
-  const toggleMusic=v=>{setMusicEnabled(v);ss("music_enabled",v);};
+  const toggleMusic = v => { setMusicEnabled(v); ss("music_enabled", v); };
 
-const handleMusicUpload = async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
+  // 1. Automatically load the saved music file from IndexedDB on startup
+  useEffect(() => {
+    async function loadAudio() {
+      try {
+        const savedFile = await getMP3();
+        if (savedFile) {
+          const url = URL.createObjectURL(savedFile);
+          if (audioRef && audioRef.current) {
+            audioRef.current.src = url;
+          }
+          setMusicHasFile(true);
+          setMusicFileName(savedFile.name);
+        }
+      } catch (err) {
+        console.error("Failed to load music from storage:", err);
+      }
+    }
+    loadAudio();
+  }, []);
 
-  // Check file size (max 8MB)
-  if (file.size > 8 * 1024 * 1024) {
-    alert("File is too large! Please choose an audio file under 8MB.");
-    return;
-  }
+  // 2. The handleMusicUpload function that runs when you choose a file
+  const handleMusicUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
 
-  try {
-    // 1. Save permanently to the browser database
-    await saveMP3(file);
-
-    // 2. Create a temporary playable url
-    const url = URL.createObjectURL(file);
-    if (audioRef && audioRef.current) {
-      audioRef.current.src = url;
+    if (file.size > 8 * 1024 * 1024) {
+      setMusicMsg("❌ File is too large! Max 8MB.");
+      return;
     }
 
-    // 3. Update the app's visual state
-    setMusicHasFile(true);
-    setMusicFileName(file.name);
-    setMusicMsg("Music saved permanently to your device!");
-  } catch (err) {
-    console.error("Error saving music file:", err);
-    alert("Could not save the audio file.");
-  }
-};
+    try {
+      // Save permanently to the browser's IndexedDB
+      await saveMP3(file);
+
+      // Create a temporary playable url
+      const url = URL.createObjectURL(file);
+      if (audioRef && audioRef.current) {
+        audioRef.current.src = url;
+      }
+
+      // Update state and save the file name to local storage
+      setMusicHasFile(true);
+      setMusicFileName(file.name);
+      ss("music_file_name", file.name);
+      setMusicMsg("🎵 Music saved permanently!");
+    } catch (err) {
+      console.error("Error saving music file:", err);
+      setMusicMsg("❌ Could not save the audio file.");
+    }
+  };
 
   const clearMusicFile=()=>{
     ss("music_file_b64",null);ss("music_file_name","");

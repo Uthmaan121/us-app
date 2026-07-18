@@ -1,5 +1,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 
 /* ════════════════════════════════════════════
    CONFIG  — fill in your Firebase detailss
@@ -10,6 +12,10 @@ const ALLOWED_EMAILS= ["hyphen080@gmail.com","malikareebah157@gmail.com"];
 // from which email is signed in, never a per-device default both users share.
 const ROLE_BY_EMAIL = {"hyphen080@gmail.com":"uthmaan","malikareebah157@gmail.com":"areebah"};
 const ROLE_NAMES    = {uthmaan:"Uthmaan",areebah:"Areebah"};
+// Fixed per-account accent colours, used anywhere authorship needs to be
+// told apart at a glance (fridge notes, chat bubbles, etc.) — independent
+// of the active colour theme so it's always readable either way.
+const ROLE_COLORS   = {uthmaan:"#3D6FD6",areebah:"#D6407D"};
 const otherRole = r => r==="uthmaan"?"areebah":"uthmaan";
 const MAX_USERS     = 5;
 const DEF_START     = "2026-04-14";
@@ -126,7 +132,7 @@ function hav(la1,lo1,la2,lo2){
   const a=Math.sin(dlat/2)**2+Math.cos(la1*d)*Math.cos(la2*d)*Math.sin(dlon/2)**2;
   return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }
-const fmtDist=km=>km<1?`${Math.round(km*1000)} m`:`${km.toFixed(1)} km`;
+const fmtDist=km=>{const mi=km*0.621371;return mi<0.1?`${Math.round(mi*5280)} ft`:`${mi.toFixed(1)} mi`;};
 function calcE(s){
   let d=Math.max(0,Math.floor((Date.now()-new Date(s))/1000));
   const yr=Math.floor(d/31557600);d-=yr*31557600;const mo=Math.floor(d/2629800);d-=mo*2629800;
@@ -187,6 +193,9 @@ const THEMES={
   forest:{name:"Forest",bg:"#F0F4F0",sf:"#fff",rose:"#D5E8D5",deep:"#C4DCCA",accent:"#3D7A54",ink:"#1A2A1F"},
   ocean:{name:"Ocean",bg:"#EFF5FB",sf:"#fff",rose:"#D4E6F5",deep:"#C4D8F0",accent:"#2A72B5",ink:"#0F1F30"},
   sand:{name:"Sand",bg:"#FAF5ED",sf:"#fff",rose:"#EDE0CF",deep:"#E0D0B8",accent:"#A07840",ink:"#2A1F10"},
+  // Opt-in preview only — never the default. Selecting it doesn't change any
+  // of the five themes above; it's purely an extra option to try.
+  claudetest:{name:"Claude Theme Test",bg:"#16130F",sf:"#221D18",rose:"#2E2620",deep:"#271F19",accent:"#E67E4D",ink:"#F6EEE6"},
 };
 const NAV_IDS=["home","me","fridge","dates","map","gallery","notes","settings"];
 
@@ -273,6 +282,11 @@ body{font-family:'Inter',-apple-system,sans-serif;color:var(--ink);-webkit-font-
 .mb:active{transform:scale(.86)}.mb.on{background:color-mix(in srgb,var(--accent) 12%,transparent)}
 .mb.on::after{content:'';position:absolute;bottom:3px;left:50%;transform:translateX(-50%);width:4px;height:4px;background:var(--accent);border-radius:50%}
 .note-bar{display:flex;align-items:center;gap:8px;background:color-mix(in srgb,var(--ink) 6%,transparent);border-radius:50px;padding:9px 13px;margin-top:10px}
+.chat-scroll{height:210px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:2px 2px 4px}
+.chat-row{display:flex;justify-content:flex-start}
+.chat-row.me{justify-content:flex-end}
+.chat-bubble{max-width:78%;padding:8px 13px;border-radius:16px;font-size:13px;line-height:1.45;word-break:break-word;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.chat-time{font-size:9px;color:var(--muted);margin-top:2px;padding:0 4px}
 .note-inp{flex:1;border:none;background:none;font-size:14px;color:var(--ink);outline:none}.note-inp::placeholder{color:var(--muted)}
 .btn-p{width:100%;padding:13px;background:linear-gradient(135deg,var(--accent),color-mix(in srgb,var(--accent) 80%,#f99));color:#fff;border:none;border-radius:13px;font-size:14px;font-weight:600;letter-spacing:.04em;cursor:pointer}
 .btn-p:active{opacity:.82}.btn-p.danger{background:linear-gradient(135deg,#e05050,#f07070)!important}
@@ -308,7 +322,7 @@ body{font-family:'Inter',-apple-system,sans-serif;color:var(--ink);-webkit-font-
 .sticky-del{position:absolute;top:7px;right:7px;width:20px;height:20px;background:rgba(0,0,0,.1);border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;color:rgba(0,0,0,.45)}
 .sticky-txt{font-size:13px;line-height:1.55;color:var(--ink);word-break:break-word;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:5;overflow:hidden}
 .sticky-date{position:absolute;bottom:9px;left:12px;font-size:10px;color:rgba(0,0,0,.32);font-weight:500}
-.sticky-author{position:absolute;bottom:9px;right:12px;font-size:9px;font-weight:700;letter-spacing:.04em;color:rgba(0,0,0,.35)}
+.sticky-badge{position:absolute;top:10px;left:10px;font-size:9px;font-weight:700;letter-spacing:.03em;color:#fff;padding:3px 9px;border-radius:50px;box-shadow:0 1px 4px rgba(0,0,0,.15)}
 .col-row{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 2px}.col-dot{width:26px;height:26px;border-radius:50%;border:none;cursor:pointer}.col-dot.sel{box-shadow:0 0 0 2.5px var(--sf),0 0 0 4.5px var(--accent)}
 .tab-row{display:flex;border-bottom:1px solid var(--border);margin-bottom:12px;overflow-x:auto}
 .tab{flex-shrink:0;padding:8px 12px;background:none;border:none;border-bottom:2px solid transparent;font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;cursor:pointer;color:var(--muted);transition:.15s;white-space:nowrap}.tab.on{border-bottom-color:var(--accent);color:var(--accent)}
@@ -329,6 +343,8 @@ body{font-family:'Inter',-apple-system,sans-serif;color:var(--ink);-webkit-font-
 .profs-row{display:flex;justify-content:center;align-items:center;gap:clamp(14px,4.5vw,28px);padding:8px 0 4px}
 .prof-item{display:flex;flex-direction:column;align-items:center;gap:6px}
 .prof-circle{width:clamp(62px,17vw,76px);height:clamp(62px,17vw,76px);border-radius:50%;overflow:hidden;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.av-wrap{position:relative;display:inline-block}
+.mood-badge{position:absolute;bottom:-2px;right:-2px;border-radius:50%;background:var(--sf);box-shadow:0 2px 6px rgba(0,0,0,.22);display:flex;align-items:center;justify-content:center;border:2px solid var(--sf)}
 .prof-me{background:linear-gradient(135deg,#2C2420,#4A3830)}.prof-them{background:var(--rose);border:2px dashed var(--border)}
 .dist-card{background:var(--sf);border-radius:var(--r);padding:14px 16px;margin-bottom:10px;display:flex;align-items:center;gap:12px;box-shadow:var(--sh);cursor:pointer;flex-wrap:wrap}
 .dist-icon{width:42px;height:42px;background:var(--rose);border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0}
@@ -370,6 +386,23 @@ body{font-family:'Inter',-apple-system,sans-serif;color:var(--ink);-webkit-font-
   .bday-card-today{background:linear-gradient(135deg,var(--deep) 0%,var(--rose) 100%);border-radius:var(--r);padding:18px;margin-bottom:10px;box-shadow:var(--sh);text-align:center;position:relative;overflow:hidden}
   .bday-card-norm{background:var(--sf);border-radius:var(--r);padding:16px 18px;margin-bottom:10px;box-shadow:var(--sh)}
   .bday-soon-badge{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);display:block;margin-top:2px}
+${theme==='claudetest'?`
+/* ── Claude Theme Test — opt-in polish pass, only active on this theme ── */
+body{background:radial-gradient(ellipse 900px 500px at 50% -8%,${t.rose} 0%,${t.bg} 60%)}
+.card{background:linear-gradient(160deg,color-mix(in srgb,${t.sf} 94%,#fff 6%) 0%,${t.sf} 100%);border:1px solid ${t.accent}20;box-shadow:0 1px 0 ${t.accent}14 inset,0 12px 30px rgba(0,0,0,.3)}
+.card-title{position:relative;padding-left:13px}
+.card-title::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);width:4px;height:15px;background:linear-gradient(${t.accent},color-mix(in srgb,${t.accent} 55%,#fff 45%));border-radius:3px}
+.btn-p{background:linear-gradient(155deg,color-mix(in srgb,${t.accent} 90%,#fff 18%),${t.accent} 55%,color-mix(in srgb,${t.accent} 82%,#000 18%));box-shadow:0 1px 0 rgba(255,255,255,.28) inset,0 10px 22px ${t.accent}40;letter-spacing:.04em;transition:transform .12s}
+.btn-p:active{transform:translateY(1px) scale(.99)}
+.us-hdr{background:linear-gradient(${t.bg},${t.bg}00)!important}
+.us-nav{position:relative}
+.us-nav::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,${t.accent}66,transparent)}
+.ctr-card{box-shadow:0 16px 36px rgba(0,0,0,.38),0 0 0 1px ${t.accent}22 inset}
+.sticky,.dist-card,.place-card,.mem-card,.date-history-card,.theme-card,.stat-box{box-shadow:0 8px 22px rgba(0,0,0,.24)!important}
+.auth-title,.logo{text-shadow:0 2px 16px ${t.accent}40}
+.btn-i.btn-ia{box-shadow:0 8px 18px ${t.accent}48!important}
+.pin-key,.av-ring,.prof-circle{box-shadow:0 8px 20px rgba(0,0,0,.28)!important}
+`:''}
 `;}
 
 /* ── Icons ──────────────────────────────────────────────── */
@@ -943,31 +976,47 @@ function CounterCard({startDate}){
 /* ═══════════════════════════════════════════
    MOOD CARD
 ═══════════════════════════════════════════ */
-function MoodCard({moodEmojis,onEditEmojis,myRole,theirRole}){
-  const[myMood,setMyMood]=useSync("mood_"+myRole,null);
-  const[note,setNote]=useState("");
-  const[lastNote,setLastNote]=useSync("last_note",null);
-  const[them,setThem]=useState(false);
-  const[theirMood]=useSync("mood_"+theirRole,null);
-  const send=()=>{if(!note.trim())return;setLastNote({text:note.trim(),ts:Date.now()});setNote("");};
+function ChatCard({myRole,theirRole,theirName}){
+  const[messages,setMessages]=useSync("chat_messages",[]);
+  const[draft,setDraft]=useState("");
+  const scrollRef=useRef(null);
+  useEffect(()=>{
+    const el=scrollRef.current;
+    if(el)el.scrollTop=el.scrollHeight;
+  },[messages.length]);
+  const send=()=>{
+    if(!draft.trim())return;
+    // Keep the synced payload bounded — this is a live 2-person chat, not an
+    // archive; trimming old messages keeps every write small and instant.
+    const next=[...messages,{id:Date.now()+Math.random(),text:draft.trim(),author:myRole,ts:Date.now()}].slice(-150);
+    setMessages(next);
+    setDraft("");
+  };
   return(
-    <div className="card">
-      <div className="card-hdr">
-        <h3 className="card-title">Mood</h3>
-        <div style={{display:"flex",gap:8,alignItems:"center"}}>
-          <button className="edit-pen" title="Edit emojis" onClick={onEditEmojis}><IcPen/></button>
-          <button style={{background:"none",border:"none",cursor:"pointer",fontSize:11,fontWeight:700,letterSpacing:".06em",color:!them?"var(--accent)":"var(--muted)"}} onClick={()=>setThem(false)}>me</button>
-          <span style={{color:"var(--border)"}}>·</span>
-          <button style={{background:"none",border:"none",cursor:"pointer",fontSize:11,fontWeight:700,letterSpacing:".06em",color:them?"var(--accent)":"var(--muted)"}} onClick={()=>setThem(true)}>them</button>
-        </div>
+    <div className="card" style={{paddingBottom:12}}>
+      <div className="card-hdr" style={{marginBottom:6}}>
+        <h3 className="card-title">Chat</h3>
+        <span style={{fontSize:9,fontWeight:700,letterSpacing:".1em",textTransform:"uppercase",color:"#4CAF50",display:"flex",alignItems:"center",gap:4}}><span className="sync-dot on"/>Live</span>
       </div>
-      {them
-        ?<div style={{textAlign:"center",padding:"16px 0",color:"var(--muted)"}}>{theirMood?<span style={{fontSize:48}}>{theirMood}</span>:<p style={{fontSize:13}}>Their mood will appear here.</p>}</div>
-        :<>
-          <div className="mood-row">{(moodEmojis||DEF_MOODS).map(e=><button key={e} className={`mb${myMood===e?" on":""}`} onClick={()=>setMyMood(e)}>{e}</button>)}</div>
-          <div className="note-bar"><input className="note-inp" placeholder="Send a quick note…" value={note} onChange={e=>setNote(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()}/><button className="btn-i" style={{width:32,height:32,background:"var(--deep)"}} onClick={send}><IcSend/></button></div>
-          {lastNote&&<p style={{marginTop:7,fontSize:11,color:"var(--muted)",textAlign:"right"}}>"{lastNote.text}" · {ago(lastNote.ts)}</p>}
-        </>}
+      <div ref={scrollRef} className="chat-scroll">
+        {messages.length===0
+          ?<div style={{margin:"auto",textAlign:"center",padding:"10px",color:"var(--muted)",fontSize:13}}>Say something to {theirName} 💬</div>
+          :messages.map(m=>{
+            const mine=m.author===myRole;
+            return(
+              <div key={m.id} className={`chat-row${mine?" me":""}`}>
+                <div style={{display:"flex",flexDirection:"column",alignItems:mine?"flex-end":"flex-start"}}>
+                  <div className="chat-bubble" style={{background:mine?"var(--accent)":`color-mix(in srgb, ${ROLE_COLORS[m.author]||"var(--ink)"} 16%, var(--rose))`,color:mine?"#fff":"var(--ink)"}}>{m.text}</div>
+                  <span className="chat-time">{ago(m.ts)}</span>
+                </div>
+              </div>
+            );
+          })}
+      </div>
+      <div className="note-bar" style={{marginTop:8}}>
+        <input className="note-inp" placeholder={`Message ${theirName}…`} value={draft} onChange={e=>setDraft(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()}/>
+        <button className="btn-i" style={{width:32,height:32,background:"var(--deep)"}} onClick={send}><IcSend/></button>
+      </div>
     </div>
   );
 }
@@ -978,6 +1027,7 @@ function MoodCard({moodEmojis,onEditEmojis,myRole,theirRole}){
 function DistanceCard({myRole,theirRole}){
   const[myLoc,setMyLoc]=useSync("loc_"+myRole,null);
   const[theirLoc]=useSync("loc_"+theirRole,null);
+  const[liveOn,setLiveOn]=useSync("live_loc_"+myRole,false);
   const[loading,setLoading]=useState(false);const[open,setOpen]=useState(false);
   const dist=myLoc&&theirLoc?hav(myLoc.lat,myLoc.lon,theirLoc.lat,theirLoc.lon):null;
   const sub=!myLoc?"Share your location":!theirLoc?"Waiting on them…":`${fmtDist(dist)} apart`;
@@ -994,15 +1044,24 @@ function DistanceCard({myRole,theirRole}){
       <div style={{display:"flex",alignItems:"center",gap:12,flex:1,minWidth:0}}>
         <div className="dist-icon"><span style={{color:"var(--accent)",display:"flex"}}><IcPin/></span></div>
         <div style={{flex:1,minWidth:0}}>
-          <div className="lbl" style={{marginBottom:3}}>Distance</div>
+          <div className="lbl" style={{marginBottom:3}}>Distance{liveOn&&<span style={{color:"#4CAF50"}}> · live</span>}</div>
           <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(15px,4.5vw,18px)",fontWeight:600,color:"var(--ink)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{sub}</div>
           {dist!=null&&<div className="dist-bar"><div className="dist-fill" style={{width:`${pct}%`}}/></div>}
         </div>
         {myLoc&&<span style={{fontSize:11,color:"var(--muted)",flexShrink:0}}>{ago(myLoc.ts)}</span>}
         <span style={{color:"var(--muted)",transform:open?"rotate(180deg)":"",transition:".2s",display:"flex",flexShrink:0}}><IcChevD/></span>
       </div>
-      {open&&<div style={{width:"100%",paddingTop:12,borderTop:"1px solid var(--border)",marginTop:10}}>
-        <button style={{width:"100%",padding:"10px",background:"var(--rose)",border:"none",borderRadius:11,fontSize:13,fontWeight:600,color:"var(--accent)",cursor:"pointer"}} onClick={e=>{e.stopPropagation();share();}}>{loading?"Getting location…":"📍 Update My Location"}</button>
+      {open&&<div style={{width:"100%",paddingTop:12,borderTop:"1px solid var(--border)",marginTop:10}} onClick={e=>e.stopPropagation()}>
+        <label style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,cursor:"pointer",marginBottom:10}}>
+          <span style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>Live Location</span>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div onClick={()=>setLiveOn(!liveOn)} style={{width:38,height:22,background:liveOn?"var(--accent)":"var(--border)",borderRadius:50,position:"relative",transition:".2s",flexShrink:0,cursor:"pointer"}}>
+              <div style={{position:"absolute",top:3,left:liveOn?17:3,width:16,height:16,background:"#fff",borderRadius:"50%",transition:".2s",boxShadow:"0 1px 4px rgba(0,0,0,.2)"}}/>
+            </div>
+          </div>
+        </label>
+        <p className="cap" style={{marginBottom:10}}>{liveOn?"Updates automatically as you move, in the background — no need to tap the button.":"Off — your location only updates when you tap the button below."}</p>
+        <button style={{width:"100%",padding:"10px",background:"var(--rose)",border:"none",borderRadius:11,fontSize:13,fontWeight:600,color:"var(--accent)",cursor:"pointer"}} onClick={share}>{loading?"Getting location…":"📍 Update My Location Now"}</button>
         {myLoc&&theirLoc&&<p style={{marginTop:8,fontSize:12,color:"var(--slate)",textAlign:"center"}}>Them last updated: {ago(theirLoc.ts)}</p>}
       </div>}
     </div>
@@ -1015,16 +1074,24 @@ function DistanceCard({myRole,theirRole}){
 function ProfileCircles({myName,theirName,connEmoji,onEditEmoji,onMeClick,onThemClick,myRole,theirRole}){
   const[myPhoto]=useSync("photo_"+myRole,null);
   const[theirPhoto]=useSync("photo_"+theirRole,null);
+  const[myMood]=useSync("mood_"+myRole,null);
+  const[theirMood]=useSync("mood_"+theirRole,null);
   return(
     <div className="profs-row">
       <div className="prof-item" style={{cursor:"pointer"}} onClick={onMeClick}>
-        <div className="prof-circle prof-me">{myPhoto?<img src={myPhoto} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="me"/>:<div className="av-ph"><span style={{fontSize:"clamp(26px,8vw,32px)"}}>👤</span></div>}</div>
+        <div className="av-wrap">
+          <div className="prof-circle prof-me">{myPhoto?<img src={myPhoto} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="me"/>:<div className="av-ph"><span style={{fontSize:"clamp(26px,8vw,32px)"}}>👤</span></div>}</div>
+          {myMood&&<span className="mood-badge" style={{width:22,height:22,fontSize:13}}>{myMood}</span>}
+        </div>
         <span style={{fontSize:9,fontWeight:700,letterSpacing:".1em",textTransform:"uppercase",color:"var(--muted)"}}>me</span>
         <span style={{fontSize:12,fontWeight:500,color:"var(--slate)"}}>{myName}</span>
       </div>
       <button style={{marginTop:-12,fontSize:"clamp(18px,5vw,22px)",background:"none",border:"none",cursor:"pointer"}} onClick={onEditEmoji}>{connEmoji||"💕"}</button>
       <div className="prof-item" style={{cursor:"pointer"}} onClick={onThemClick}>
-        <div className="prof-circle prof-them">{theirPhoto?<img src={theirPhoto} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="them"/>:<span style={{fontSize:"clamp(26px,8vw,32px)",color:"var(--muted)"}}>?</span>}</div>
+        <div className="av-wrap">
+          <div className="prof-circle prof-them">{theirPhoto?<img src={theirPhoto} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="them"/>:<span style={{fontSize:"clamp(26px,8vw,32px)",color:"var(--muted)"}}>?</span>}</div>
+          {theirMood&&<span className="mood-badge" style={{width:22,height:22,fontSize:13}}>{theirMood}</span>}
+        </div>
         <span style={{fontSize:9,fontWeight:700,letterSpacing:".1em",textTransform:"uppercase",color:"var(--muted)"}}>them</span>
         <span style={{fontSize:12,fontWeight:500,color:"var(--slate)"}}>{theirName}</span>
       </div>
@@ -1035,17 +1102,15 @@ function ProfileCircles({myName,theirName,connEmoji,onEditEmoji,onMeClick,onThem
 /* ═══════════════════════════════════════════
    HOME PAGE
 ═══════════════════════════════════════════ */
-function HomePage({myName,theirName,startDate,nav,moodEmojis,setMoodEmojis,connEmoji,setConnEmoji,myRole,theirRole}){
-  const[editEmojis,setEditEmojis]=useState(false);const[emojiDraft,setEmojiDraft]=useState((moodEmojis||DEF_MOODS).join(" "));
+function HomePage({myName,theirName,startDate,nav,connEmoji,setConnEmoji,myRole,theirRole}){
   const[editConn,setEditConn]=useState(false);const[connDraft,setConnDraft]=useState(connEmoji||"💕");
   return(
     <div className="us-page pf">
       <CounterCard startDate={startDate}/>
       <BirthdayCard/>
-      <MoodCard moodEmojis={moodEmojis} onEditEmojis={()=>{setEmojiDraft((moodEmojis||DEF_MOODS).join(" "));setEditEmojis(true);}} myRole={myRole} theirRole={theirRole}/>
+      <ChatCard myRole={myRole} theirRole={theirRole} theirName={theirName}/>
       <DistanceCard myRole={myRole} theirRole={theirRole}/>
       <ProfileCircles myName={myName} theirName={theirName} connEmoji={connEmoji} onMeClick={()=>nav("me")} onThemClick={()=>nav("them")} onEditEmoji={()=>{setConnDraft(connEmoji||"💕");setEditConn(true);}} myRole={myRole} theirRole={theirRole}/>
-      {editEmojis&&<div className="overlay" onClick={()=>setEditEmojis(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="sh-handle"/><h3 className="sh-title">Edit Mood Emojis</h3><p className="cap" style={{marginBottom:10}}>Up to 10 emojis, space-separated</p><input className="field" value={emojiDraft} onChange={e=>setEmojiDraft(e.target.value)} style={{fontSize:22,letterSpacing:4,marginBottom:12}}/><button className="btn-p" onClick={()=>{const a=emojiDraft.split(/\s+/).filter(Boolean).slice(0,10);setMoodEmojis(a);setEditEmojis(false);}}>Save</button></div></div>}
       {editConn&&<div className="overlay" onClick={()=>setEditConn(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="sh-handle"/><h3 className="sh-title">Connection Emoji</h3><input className="field" value={connDraft} onChange={e=>setConnDraft(e.target.value)} maxLength={2} style={{fontSize:32,textAlign:"center",letterSpacing:4,marginBottom:12}}/><button className="btn-p" onClick={()=>{setConnEmoji(connDraft);setEditConn(false);}}>Save</button></div></div>}
     </div>
   );
@@ -1054,11 +1119,13 @@ function HomePage({myName,theirName,startDate,nav,moodEmojis,setMoodEmojis,connE
 /* ═══════════════════════════════════════════
    ME PAGE
 ═══════════════════════════════════════════ */
-function MePage({myName,theirName,startDate,onSettings,pageName,setPageName,myRole}){
+function MePage({myName,theirName,startDate,onSettings,pageName,setPageName,myRole,moodEmojis,setMoodEmojis}){
   const[photo,setPhoto]=useSync("photo_"+myRole,null);
   const[bio,setBio]=useSync("bio_"+myRole,"");
+  const[myMood,setMyMood]=useSync("mood_"+myRole,null);
   const[editBio,setEditBio]=useState(false);const[draft,setDraft]=useState(bio);
   const[showSet,setShowSet]=useState(false);const[sN,setSN]=useState(myName);const[sT,setST]=useState(theirName);
+  const[editEmojis,setEditEmojis]=useState(false);const[emojiDraft,setEmojiDraft]=useState((moodEmojis||DEF_MOODS).join(" "));
   const fileRef=useRef();
   const handlePhoto=async e=>{
     const f=e.target.files[0];if(!f)return;
@@ -1075,10 +1142,18 @@ function MePage({myName,theirName,startDate,onSettings,pageName,setPageName,myRo
     <div className="us-page pf">
       <div className="row-bw"><EditTitle value={pageName} onSave={setPageName}/></div>
       <div style={{textAlign:"center",paddingBottom:14}}>
-        <div className="av-ring" onClick={()=>fileRef.current.click()}>{photo?<img src={photo} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="me"/>:<div className="av-ph"><span>👤</span></div>}</div>
+        <div className="av-wrap">
+          <div className="av-ring" onClick={()=>fileRef.current.click()}>{photo?<img src={photo} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="me"/>:<div className="av-ph"><span>👤</span></div>}</div>
+          {myMood&&<span className="mood-badge" style={{width:32,height:32,fontSize:18}}>{myMood}</span>}
+        </div>
         <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handlePhoto}/>
         <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(20px,5.5vw,26px)",fontWeight:600}}>{myName}</h2>
         <p className="cap" style={{marginTop:4}}>in love since {new Date(startDate).toLocaleDateString("en-GB",{day:"numeric",month:"long",year:"numeric"})}</p>
+      </div>
+      <div className="card">
+        <div className="card-hdr"><h3 className="card-title">My Mood</h3><button className="edit-pen" title="Edit emoji options" onClick={()=>{setEmojiDraft((moodEmojis||DEF_MOODS).join(" "));setEditEmojis(true);}}><IcPen/></button></div>
+        <p className="cap" style={{marginBottom:10}}>Shows as a little badge on your photo, everywhere it appears.</p>
+        <div className="mood-row">{(moodEmojis||DEF_MOODS).map(em=><button key={em} className={`mb${myMood===em?" on":""}`} onClick={()=>setMyMood(myMood===em?null:em)}>{em}</button>)}</div>
       </div>
       <div className="card">
         <div className="card-hdr"><h3 className="card-title">About Me</h3><button className="btn-g" onClick={()=>{setEditBio(!editBio);setDraft(bio);}}>{editBio?"Cancel":"Edit"}</button></div>
@@ -1094,6 +1169,7 @@ function MePage({myName,theirName,startDate,onSettings,pageName,setPageName,myRo
           <button className="btn-p" onClick={()=>{onSettings({myName:sN,theirName:sT,startDate});setShowSet(false);}}>Save</button>
         </div>:<div>{[{l:"Your name",v:myName},{l:"Their name",v:theirName},{l:"Since",v:new Date(startDate).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}].map(r=><div key={r.l} className="srow"><span style={{fontSize:14,fontWeight:500,color:"var(--ink)"}}>{r.l}</span><span className="cap">{r.v}</span></div>)}</div>}
       </div>
+      {editEmojis&&<div className="overlay" onClick={()=>setEditEmojis(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="sh-handle"/><h3 className="sh-title">Mood Emoji Options</h3><p className="cap" style={{marginBottom:10}}>Up to 10 emojis, space-separated</p><input className="field" value={emojiDraft} onChange={e=>setEmojiDraft(e.target.value)} style={{fontSize:22,letterSpacing:4,marginBottom:12}}/><button className="btn-p" onClick={()=>{const a=emojiDraft.split(/\s+/).filter(Boolean).slice(0,10);setMoodEmojis(a);setEditEmojis(false);}}>Save</button></div></div>}
     </div>
   );
 }
@@ -1104,11 +1180,15 @@ function MePage({myName,theirName,startDate,onSettings,pageName,setPageName,myRo
 function PartnerProfilePage({theirName,startDate,theirRole}){
   const[photo]=useSync("photo_"+theirRole,null);
   const[bio]=useSync("bio_"+theirRole,"");
+  const[theirMood]=useSync("mood_"+theirRole,null);
   const days=Math.floor((Date.now()-new Date(startDate))/86400000);const e=calcE(startDate);
   return(
     <div className="us-page pf">
       <div style={{textAlign:"center",paddingBottom:14}}>
-        <div className="av-ring" style={{cursor:"default"}}>{photo?<img src={photo} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="them"/>:<div className="av-ph"><span>👤</span></div>}</div>
+        <div className="av-wrap">
+          <div className="av-ring" style={{cursor:"default"}}>{photo?<img src={photo} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="them"/>:<div className="av-ph"><span>👤</span></div>}</div>
+          {theirMood&&<span className="mood-badge" style={{width:32,height:32,fontSize:18}}>{theirMood}</span>}
+        </div>
         <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(20px,5.5vw,26px)",fontWeight:600}}>{theirName}</h2>
         <p className="cap" style={{marginTop:4}}>in love since {new Date(startDate).toLocaleDateString("en-GB",{day:"numeric",month:"long",year:"numeric"})}</p>
       </div>
@@ -1126,22 +1206,70 @@ function PartnerProfilePage({theirName,startDate,theirRole}){
 /* ═══════════════════════════════════════════
    FRIDGE PAGE
 ═══════════════════════════════════════════ */
+const VOICE_NOTE_MAX_SEC=90;
 function FridgePage({pageName,setPageName,myRole}){
   const[notes,setNotes]=useSync("fridge_notes",[]);
   const[modal,setModal]=useState(false);const[txt,setTxt]=useState("");const[col,setCol]=useState(NOTE_COLS[0]);
   const[editingId,setEditingId]=useState(null);
   const[expandId,setExpandId]=useState(null);
   const[ask,confirmDialog]=useConfirm();
-  // Notes stuck before this feature shipped have no author — treat those as
-  // editable by either of you rather than locking them to nobody.
-  const isMine=n=>!n.author||n.author===myRole;
-  const openNew=()=>{setEditingId(null);setTxt("");setCol(NOTE_COLS[0]);setModal(true);};
-  const openEdit=n=>{setEditingId(n.id);setTxt(n.text);setCol(n.color);setModal(true);setExpandId(null);};
+  // Voice recording state
+  const[recording,setRecording]=useState(false);
+  const[recSecs,setRecSecs]=useState(0);
+  const[audioData,setAudioData]=useState(null);
+  const[audioSecs,setAudioSecs]=useState(0);
+  const[recErr,setRecErr]=useState("");
+  const recorderRef=useRef(null);const chunksRef=useRef([]);const timerRef=useRef(null);
+
+  // Strict: only the exact author can edit or delete their own note — never
+  // the other account, and never a note stuck before authorship was tracked
+  // (there's no way to know who really wrote those, so nobody can touch them).
+  const isMine=n=>!!n.author&&n.author===myRole;
+  const resetComposer=()=>{setTxt("");setAudioData(null);setAudioSecs(0);setRecErr("");};
+  const openNew=()=>{setEditingId(null);resetComposer();setCol(NOTE_COLS[0]);setModal(true);};
+  const openEdit=n=>{setEditingId(n.id);setTxt(n.text||"");setCol(n.color);setAudioData(n.audioData||null);setAudioSecs(n.audioSecs||0);setRecErr("");setModal(true);setExpandId(null);};
+
+  const startRecording=async()=>{
+    setRecErr("");
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+      const mr=new MediaRecorder(stream);
+      chunksRef.current=[];
+      mr.ondataavailable=e=>{if(e.data.size>0)chunksRef.current.push(e.data);};
+      mr.onstop=()=>{
+        stream.getTracks().forEach(t=>t.stop());
+        const blob=new Blob(chunksRef.current,{type:mr.mimeType||"audio/webm"});
+        const reader=new FileReader();
+        reader.onload=ev=>{setAudioData(ev.target.result);};
+        reader.readAsDataURL(blob);
+      };
+      mr.start();
+      recorderRef.current=mr;
+      setRecording(true);setRecSecs(0);
+      const startedAt=Date.now();
+      timerRef.current=setInterval(()=>{
+        const s=Math.floor((Date.now()-startedAt)/1000);
+        setRecSecs(s);
+        if(s>=VOICE_NOTE_MAX_SEC)stopRecording(s);
+      },250);
+    }catch(e){
+      setRecErr("Couldn't access the microphone. Check the site's mic permission and try again.");
+    }
+  };
+  const stopRecording=finalSecs=>{
+    if(timerRef.current){clearInterval(timerRef.current);timerRef.current=null;}
+    if(recorderRef.current&&recorderRef.current.state!=="inactive")recorderRef.current.stop();
+    setRecording(false);
+    setAudioSecs(finalSecs??recSecs);
+  };
+  useEffect(()=>()=>{if(timerRef.current)clearInterval(timerRef.current);},[]);
+
   const save=()=>{
-    if(!txt.trim())return;
-    if(editingId)setNotes(notes.map(n=>n.id===editingId?{...n,text:txt.trim(),color:col}:n));
-    else setNotes([...notes,{id:Date.now(),text:txt.trim(),color:col,ts:Date.now(),author:myRole}]);
-    setTxt("");setModal(false);setEditingId(null);
+    if(!txt.trim()&&!audioData)return;
+    const payload={text:txt.trim(),color:col,audioData:audioData||null,audioSecs:audioData?audioSecs:0};
+    if(editingId)setNotes(notes.map(n=>n.id===editingId?{...n,...payload}:n));
+    else setNotes([...notes,{id:Date.now(),...payload,ts:Date.now(),author:myRole}]);
+    resetComposer();setModal(false);setEditingId(null);
   };
   const del=id=>ask("Delete this note?",()=>{setNotes(notes.filter(n=>n.id!==id));setExpandId(null);});
   const expanded=notes.find(n=>n.id===expandId);
@@ -1151,9 +1279,10 @@ function FridgePage({pageName,setPageName,myRole}){
       {notes.length===0?<div className="empty"><div className="empty-e">📋</div><p className="empty-t">Nothing here yet.<br/>Stick a note!</p></div>
         :<div className="fridge-grid">{[...notes].reverse().map(n=>(
           <div key={n.id} className="sticky" style={{background:n.color}} onClick={()=>setExpandId(n.id)}>
-            <p className="sticky-txt">{n.text}</p>
+            <span className="sticky-badge" style={{background:n.author?ROLE_COLORS[n.author]:"rgba(0,0,0,.28)"}}>{n.author?ROLE_NAMES[n.author]:"Unclaimed"}</span>
+            {n.text&&<p className="sticky-txt" style={{marginTop:20}}>{n.text}</p>}
+            {n.audioData&&<div style={{marginTop:n.text?8:24,display:"flex",alignItems:"center",gap:6,fontSize:12,fontWeight:600,color:"rgba(0,0,0,.55)"}}>🎤 Voice · {n.audioSecs||0}s</div>}
             <span className="sticky-date">{fmtD(n.ts)}</span>
-            {n.author&&<span className="sticky-author">{ROLE_NAMES[n.author]}</span>}
           </div>
         ))}</div>}
 
@@ -1161,10 +1290,12 @@ function FridgePage({pageName,setPageName,myRole}){
       {expanded&&<div className="overlay" onClick={()=>setExpandId(null)}>
         <div className="sheet" onClick={e=>e.stopPropagation()}>
           <div className="sh-handle"/>
-          <div style={{background:expanded.color,borderRadius:14,padding:"16px 16px 14px",marginBottom:12,maxHeight:"45vh",overflowY:"auto"}}>
-            <p style={{fontSize:14,lineHeight:1.7,color:"#1A1512",whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{expanded.text}</p>
+          <div style={{background:expanded.color,borderRadius:14,padding:"16px 16px 14px",marginBottom:12,maxHeight:"45vh",overflowY:"auto",position:"relative"}}>
+            <span className="sticky-badge" style={{position:"static",display:"inline-flex",marginBottom:10,background:expanded.author?ROLE_COLORS[expanded.author]:"rgba(0,0,0,.28)"}}>{expanded.author?ROLE_NAMES[expanded.author]:"Unclaimed"}</span>
+            {expanded.text&&<p style={{fontSize:14,lineHeight:1.7,color:"#1A1512",whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{expanded.text}</p>}
+            {expanded.audioData&&<audio controls src={expanded.audioData} style={{width:"100%",marginTop:expanded.text?12:0,height:36}}/>}
           </div>
-          <p className="cap" style={{marginBottom:16}}>{expanded.author?`${ROLE_NAMES[expanded.author]} · `:""}{fmtDL(expanded.ts)}</p>
+          <p className="cap" style={{marginBottom:16}}>{fmtDL(expanded.ts)}</p>
           {isMine(expanded)?(
             <div className="conf-row">
               <button className="btn-p" style={{background:"var(--rose)",color:"var(--ink)"}} onClick={()=>openEdit(expanded)}>✏️ Edit</button>
@@ -1175,7 +1306,28 @@ function FridgePage({pageName,setPageName,myRole}){
       </div>}
 
       {/* New / edit sheet */}
-      {modal&&<div className="overlay" onClick={()=>setModal(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="sh-handle"/><h3 className="sh-title">{editingId?"Edit Note":"New Note"}</h3><textarea className="field" rows={4} placeholder="What's on your mind…" value={txt} onChange={e=>setTxt(e.target.value)} autoFocus style={{marginBottom:8}}/><div className="col-row">{NOTE_COLS.map(c=><button key={c} className={`col-dot${col===c?" sel":""}`} style={{background:c}} onClick={()=>setCol(c)}/>)}</div><button className="btn-p" onClick={save}>{editingId?"Save Changes":"Stick It"}</button></div></div>}
+      {modal&&<div className="overlay" onClick={()=>{if(recording)stopRecording();setModal(false);}}>
+        <div className="sheet" onClick={e=>e.stopPropagation()}>
+          <div className="sh-handle"/>
+          <h3 className="sh-title">{editingId?"Edit Note":"New Note"}</h3>
+          <textarea className="field" rows={4} placeholder="What's on your mind… (optional if you're leaving a voice note)" value={txt} onChange={e=>setTxt(e.target.value)} autoFocus style={{marginBottom:10}}/>
+
+          {audioData?(
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+              <audio controls src={audioData} style={{flex:1,height:36}}/>
+              <button onClick={()=>{setAudioData(null);setAudioSecs(0);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--muted)",display:"flex",padding:4}}><IcTrash/></button>
+            </div>
+          ):(
+            <button className="btn-sm" style={{width:"100%",padding:"11px",marginBottom:10,borderRadius:12,textAlign:"center",background:recording?"#e05050":"var(--rose)",color:recording?"#fff":"var(--accent)"}} onClick={recording?()=>stopRecording():startRecording}>
+              {recording?`⏹ Stop Recording (${recSecs}s / ${VOICE_NOTE_MAX_SEC}s)`:"🎤 Record Voice Note"}
+            </button>
+          )}
+          {recErr&&<p style={{color:"#e05050",fontSize:12,marginBottom:10}}>{recErr}</p>}
+
+          <div className="col-row">{NOTE_COLS.map(c=><button key={c} className={`col-dot${col===c?" sel":""}`} style={{background:c}} onClick={()=>setCol(c)}/>)}</div>
+          <button className="btn-p" onClick={save} disabled={!txt.trim()&&!audioData}>{editingId?"Save Changes":"Stick It"}</button>
+        </div>
+      </div>}
       {confirmDialog}
     </div>
   );
@@ -1361,6 +1513,108 @@ function DatesPage({pageName,setPageName}){
 /* ═══════════════════════════════════════════
    MAP PAGE
 ═══════════════════════════════════════════ */
+function avatarDivIcon(photo,emoji,color,size=36){
+  return L.divIcon({
+    className:"",
+    html:`<div style="width:${size}px;height:${size}px;border-radius:50%;overflow:hidden;box-shadow:0 0 0 3px ${color},0 3px 10px rgba(0,0,0,.45);background:${photo?"#fff":color};display:flex;align-items:center;justify-content:center;font-size:${size*0.5}px;">${photo?`<img src="${photo}" style="width:100%;height:100%;object-fit:cover;display:block"/>`:emoji}</div>`,
+    iconSize:[size,size],
+    iconAnchor:[size/2,size/2],
+  });
+}
+function memoryDivIcon(selected){
+  const s=selected?18:13;
+  return L.divIcon({
+    className:"",
+    html:`<div style="width:${s}px;height:${s}px;border-radius:50%;background:${selected?"var(--accent,#C45450)":"#fff"};box-shadow:0 0 0 2px ${selected?"#fff":"var(--accent,#C45450)"},0 2px 6px rgba(0,0,0,.4)"></div>`,
+    iconSize:[s,s],
+    iconAnchor:[s/2,s/2],
+  });
+}
+
+/* Real interactive satellite map (Leaflet + free Esri World Imagery tiles —
+   no API key). Markers/line update in place rather than re-creating the map
+   on every render, so panning/zooming stays smooth. */
+function LeafletMap({myLoc,theirLoc,myRole,theirRole,myPhoto,theirPhoto,memories,selId,onSelectMemory,view}){
+  const elRef=useRef(null);
+  const mapRef=useRef(null);
+  const layersRef=useRef({me:null,them:null,line:null,distLabel:null,mem:new Map()});
+
+  useEffect(()=>{
+    if(!elRef.current||mapRef.current)return;
+    const map=L.map(elRef.current,{zoomControl:true,attributionControl:true});
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",{
+      maxZoom:19,
+      attribution:"Tiles &copy; Esri",
+    }).addTo(map);
+    map.setView([20,0],2);
+    mapRef.current=map;
+    return()=>{map.remove();mapRef.current=null;};
+  },[]);
+
+  // Markers + connecting line + distance label
+  useEffect(()=>{
+    const map=mapRef.current;
+    if(!map)return;
+    const L_=layersRef.current;
+
+    if(myLoc){
+      const ll=[myLoc.lat,myLoc.lon];
+      if(!L_.me){L_.me=L.marker(ll,{icon:avatarDivIcon(myPhoto,"🙋",ROLE_COLORS[myRole]||"#3D6FD6")}).addTo(map);}
+      else{L_.me.setLatLng(ll);L_.me.setIcon(avatarDivIcon(myPhoto,"🙋",ROLE_COLORS[myRole]||"#3D6FD6"));}
+    }else if(L_.me){L_.me.remove();L_.me=null;}
+
+    if(theirLoc){
+      const ll=[theirLoc.lat,theirLoc.lon];
+      if(!L_.them){L_.them=L.marker(ll,{icon:avatarDivIcon(theirPhoto,"💁",ROLE_COLORS[theirRole]||"#D6407D")}).addTo(map);}
+      else{L_.them.setLatLng(ll);L_.them.setIcon(avatarDivIcon(theirPhoto,"💁",ROLE_COLORS[theirRole]||"#D6407D"));}
+    }else if(L_.them){L_.them.remove();L_.them=null;}
+
+    if(myLoc&&theirLoc){
+      const a=[myLoc.lat,myLoc.lon],b=[theirLoc.lat,theirLoc.lon];
+      if(!L_.line)L_.line=L.polyline([a,b],{color:"#fff",weight:2,opacity:.85,dashArray:"6,8"}).addTo(map);
+      else L_.line.setLatLngs([a,b]);
+      const mid=[(a[0]+b[0])/2,(a[1]+b[1])/2];
+      const distTxt=fmtDist(hav(a[0],a[1],b[0],b[1]));
+      const distIcon=L.divIcon({className:"",html:`<div style="background:rgba(0,0,0,.72);color:#fff;font-size:11px;font-weight:700;padding:4px 9px;border-radius:50px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.3)">${distTxt} apart</div>`,iconSize:[0,0]});
+      if(!L_.distLabel)L_.distLabel=L.marker(mid,{icon:distIcon,interactive:false}).addTo(map);
+      else{L_.distLabel.setLatLng(mid);L_.distLabel.setIcon(distIcon);}
+    }else{
+      if(L_.line){L_.line.remove();L_.line=null;}
+      if(L_.distLabel){L_.distLabel.remove();L_.distLabel=null;}
+    }
+
+    // Memory pins — rebuilt each time; personal-app scale, not a perf concern
+    L_.mem.forEach(mk=>mk.remove());
+    L_.mem.clear();
+    memories.forEach(m=>{
+      const mk=L.marker([m.lat,m.lon],{icon:memoryDivIcon(m.id===selId)});
+      mk.on("click",()=>onSelectMemory(m.id));
+      mk.bindTooltip(m.note,{direction:"top",offset:[0,-8]});
+      mk.addTo(map);
+      L_.mem.set(m.id,mk);
+    });
+  },[myLoc,theirLoc,myRole,theirRole,myPhoto,theirPhoto,memories,selId,onSelectMemory]);
+
+  // Camera — reacts to the view toggle and to a selected memory
+  useEffect(()=>{
+    const map=mapRef.current;
+    if(!map)return;
+    const selected=memories.find(m=>m.id===selId);
+    if(selected){map.flyTo([selected.lat,selected.lon],15,{duration:.6});return;}
+    if(view==="me"&&myLoc){map.flyTo([myLoc.lat,myLoc.lon],14,{duration:.6});return;}
+    if(view==="them"&&theirLoc){map.flyTo([theirLoc.lat,theirLoc.lon],14,{duration:.6});return;}
+    // "both" (or fallback): fit everything we have, zoomed out enough to show the connecting line
+    const pts=[];
+    if(myLoc)pts.push([myLoc.lat,myLoc.lon]);
+    if(theirLoc)pts.push([theirLoc.lat,theirLoc.lon]);
+    if(pts.length===2)map.flyToBounds(pts,{padding:[60,60],duration:.6});
+    else if(pts.length===1)map.flyTo(pts[0],13,{duration:.6});
+    else if(memories.length)map.flyTo([memories[memories.length-1].lat,memories[memories.length-1].lon],12,{duration:.6});
+  },[view,selId,myLoc,theirLoc,memories]);
+
+  return <div ref={elRef} className="map-frame" style={{background:"#0a1420"}}/>;
+}
+
 function MapPage({pageName,setPageName,myRole,theirRole,myName,theirName}){
   const[memories,setMemories]=useSync("map_memories",[]);
   const[myLoc,setMyLoc]=useSync("loc_"+myRole,null);
@@ -1368,7 +1622,7 @@ function MapPage({pageName,setPageName,myRole,theirRole,myName,theirName}){
   const[myPhoto]=useSync("photo_"+myRole,null);
   const[theirPhoto]=useSync("photo_"+theirRole,null);
   const[selId,setSelId]=useState(null);
-  const[view,setView]=useState("me"); // "me" | "them" — cleared when a memory is selected
+  const[view,setView]=useState("both"); // "both" | "me" | "them" — cleared when a memory is selected
   const[adding,setAdding]=useState(false);
   const[pending,setPending]=useState(null);const[noteText,setNoteText]=useState("");
   const[gettingLoc,setGettingLoc]=useState(false);
@@ -1376,16 +1630,6 @@ function MapPage({pageName,setPageName,myRole,theirRole,myName,theirName}){
   const dist=myLoc&&theirLoc?hav(myLoc.lat,myLoc.lon,theirLoc.lat,theirLoc.lon):null;
   const pct=dist!=null?Math.max(4,Math.min(96,100-dist/5)):null;
 
-  const selectedMemory=memories.find(m=>m.id===selId);
-  const focus=selectedMemory
-    ?{lat:selectedMemory.lat,lon:selectedMemory.lon,label:selectedMemory.note,emoji:"💝",sub:fmtD(selectedMemory.ts)}
-    :view==="them"&&theirLoc?{lat:theirLoc.lat,lon:theirLoc.lon,label:theirName,emoji:"💁",sub:ago(theirLoc.ts)}
-    :myLoc?{lat:myLoc.lat,lon:myLoc.lon,label:myName,emoji:"🙋",sub:ago(myLoc.ts)}
-    :theirLoc?{lat:theirLoc.lat,lon:theirLoc.lon,label:theirName,emoji:"💁",sub:ago(theirLoc.ts)}
-    :memories.length?{lat:memories[memories.length-1].lat,lon:memories[memories.length-1].lon,label:memories[memories.length-1].note,emoji:"💝",sub:fmtD(memories[memories.length-1].ts)}
-    :null;
-  const lat=focus?.lat??51.505,lon=focus?.lon??-0.09,delta=0.05;
-  const mapSrc=`https://www.openstreetmap.org/export/embed.html?bbox=${lon-delta},${lat-delta},${lon+delta},${lat+delta}&layer=mapnik${focus?`&marker=${lat},${lon}`:""}`;
   const saveMemory=()=>{if(!pending)return;const m={id:Date.now(),lat:pending.lat,lon:pending.lon,note:noteText.trim()||"Memory",ts:Date.now()};setMemories([...memories,m]);setSelId(m.id);setNoteText("");setPending(null);setAdding(false);};
   const delMemory=id=>ask("Delete this memory pin?",()=>{setMemories(memories.filter(m=>m.id!==id));if(selId===id)setSelId(null);});
   const findMe=()=>{
@@ -1423,8 +1667,8 @@ function MapPage({pageName,setPageName,myRole,theirRole,myName,theirName}){
 
       {/* Segmented view control */}
       <div style={{display:"flex",gap:6,marginBottom:10}}>
-        {[{k:"me",l:"🙋 "+myName,on:view==="me"&&!selId},{k:"them",l:"💁 "+theirName,on:view==="them"&&!selId}].map(t=>(
-          <button key={t.k} className={`btn-sm${t.on?" on":""}`} style={{flex:1,textAlign:"center"}} onClick={()=>{setView(t.k);setSelId(null);}}>{t.l}</button>
+        {[{k:"both",l:"🔗 Both"},{k:"me",l:"🙋 "+myName},{k:"them",l:"💁 "+theirName}].map(t=>(
+          <button key={t.k} className={`btn-sm${view===t.k&&!selId?" on":""}`} style={{flex:1,textAlign:"center"}} onClick={()=>{setView(t.k);setSelId(null);}}>{t.l}</button>
         ))}
         <button className={`btn-i${gettingLoc?" btn-ia":""}`} style={{width:38,height:38,flexShrink:0}} onClick={findMe} title="Update my location">
           {gettingLoc?<div className="spinner" style={{width:16,height:16,borderWidth:2}}/>:<IcPin/>}
@@ -1439,18 +1683,10 @@ function MapPage({pageName,setPageName,myRole,theirRole,myName,theirName}){
         <button style={{background:"color-mix(in srgb,var(--accent) 12%,transparent)",color:"var(--accent)",border:"none",borderRadius:8,padding:"5px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={()=>{setPending({lat:51.505,lon:-0.09});setAdding(false);}}>✏️ Enter Coords</button>
       </div>}
 
-      {/* Map — muted/warm tint over the raw OSM tiles so it matches the app instead of default cartoon colours */}
-      <div style={{position:"relative",marginBottom:8}}>
-        <iframe src={mapSrc} className="map-frame" title="Our Map" loading="lazy" sandbox="allow-scripts allow-same-origin"
-          style={{filter:"grayscale(.3) sepia(.22) saturate(.85) hue-rotate(-6deg) brightness(1.03)",display:"block"}}/>
-        <div style={{position:"absolute",inset:0,borderRadius:"var(--r)",boxShadow:"inset 0 0 0 1.5px color-mix(in srgb,var(--accent) 18%,transparent)",pointerEvents:"none"}}/>
-        {focus&&<div style={{position:"absolute",left:10,bottom:10,display:"flex",alignItems:"center",gap:7,background:"rgba(255,255,255,.92)",backdropFilter:"blur(6px)",borderRadius:50,padding:"6px 12px 6px 6px",boxShadow:"var(--sh-md)"}}>
-          <span style={{width:22,height:22,borderRadius:"50%",background:"var(--accent)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12}}>{focus.emoji}</span>
-          <div style={{lineHeight:1.2}}>
-            <div style={{fontSize:12,fontWeight:700,color:"#1A1512"}}>{focus.label}</div>
-            <div style={{fontSize:10,color:"#7A6560"}}>{focus.sub}</div>
-          </div>
-        </div>}
+      {/* Real satellite map — both pins, a connecting line + distance when you have both, zooms out to fit on "Both" */}
+      <div style={{position:"relative",marginBottom:8,borderRadius:"var(--r)",overflow:"hidden",boxShadow:"var(--sh-md)"}}>
+        <LeafletMap myLoc={myLoc} theirLoc={theirLoc} myRole={myRole} theirRole={theirRole} myPhoto={myPhoto} theirPhoto={theirPhoto}
+          memories={memories} selId={selId} onSelectMemory={id=>setSelId(selId===id?null:id)} view={view}/>
       </div>
 
       {memories.length===0?<div className="empty" style={{padding:"22px 20px"}}><div className="empty-e">📍</div><p className="empty-t">No memories pinned yet.<br/>Tap + above to drop your first one.</p></div>
@@ -2358,6 +2594,27 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
     return()=>unsubs.forEach(u=>u&&u());
   },[tokenReady,myRole]);
 
+  // Live Location — runs here at the root, not inside DistanceCard, so it
+  // keeps updating in the background no matter which page you're on, not
+  // just while Home happens to be mounted. Throttled to avoid spamming
+  // Firebase: at most once every 30s, or sooner if you've moved 50m+.
+  const[liveLocOn]=useSync("live_loc_"+(myRole||"uthmaan"),false);
+  useEffect(()=>{
+    if(!tokenReady||!myRole||!liveLocOn||!navigator.geolocation)return;
+    let lastWrite={ts:0,lat:null,lon:null};
+    const id=navigator.geolocation.watchPosition(p=>{
+      const{latitude:lat,longitude:lon}=p.coords;
+      const now=Date.now();
+      const movedKm=lastWrite.lat==null?Infinity:hav(lastWrite.lat,lastWrite.lon,lat,lon);
+      if(now-lastWrite.ts<30000&&movedKm*1000<50)return;
+      lastWrite={ts:now,lat,lon};
+      const loc={lat,lon,ts:now};
+      ss(`sync_loc_${myRole}`,loc);
+      dbWrite(`room/loc_${myRole}`,loc);
+    },()=>{},{enableHighAccuracy:true,maximumAge:15000,timeout:20000});
+    return()=>navigator.geolocation.clearWatch(id);
+  },[tokenReady,myRole,liveLocOn]);
+
   // One-time migration: names and the start date used to live only in this
   // device's localStorage, before they synced through Firebase. If this
   // browser still has one of those old local-only values and Firebase has
@@ -2476,9 +2733,9 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
           ?<><div className="logo">us.</div><div style={{display:"flex",alignItems:"center",gap:8}}>{synced&&<span style={{fontSize:9,fontWeight:700,color:"var(--muted)",display:"flex",alignItems:"center"}}><span className="sync-dot on"/>LIVE</span>}<button style={{background:"none",border:"none",cursor:"pointer",fontSize:10,fontWeight:700,letterSpacing:".12em",textTransform:"uppercase",color:"var(--slate)"}} onClick={()=>setPage("gallery")}>GALLERY</button></div></>
           :<><button style={{background:"none",border:"none",cursor:"pointer",color:"var(--slate)",display:"flex",padding:2}} onClick={()=>setPage("home")}><IcBack/></button><span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(15px,4.5vw,18px)",fontWeight:600,color:"var(--ink)"}}>{page==="them"?theirName:names[page]||DEF_NAMES[page]||""}</span><div style={{width:24}}/></>}
       </header>
-      {page==="home"&&<HomePage myName={myName} theirName={theirName} startDate={startDate} nav={setPage} moodEmojis={moodEmojis} setMoodEmojis={setMoodEmojis} connEmoji={connEmoji} setConnEmoji={setConnEmoji} myRole={myRole} theirRole={theirRole}/>}
+      {page==="home"&&<HomePage myName={myName} theirName={theirName} startDate={startDate} nav={setPage} connEmoji={connEmoji} setConnEmoji={setConnEmoji} myRole={myRole} theirRole={theirRole}/>}
       {page==="them"&&<PartnerProfilePage theirName={theirName} startDate={startDate} theirRole={theirRole}/>}
-      {page==="me"&&<MePage myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} pageName={names.me||DEF_NAMES.me} setPageName={makeNameSetter("me")} myRole={myRole}/>}
+      {page==="me"&&<MePage myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} pageName={names.me||DEF_NAMES.me} setPageName={makeNameSetter("me")} myRole={myRole} moodEmojis={moodEmojis} setMoodEmojis={setMoodEmojis}/>}
       {page==="fridge"&&<FridgePage pageName={names.fridge||DEF_NAMES.fridge} setPageName={makeNameSetter("fridge")} myRole={myRole}/>}
       {page==="dates"&&<DatesPage pageName={names.dates||DEF_NAMES.dates} setPageName={makeNameSetter("dates")}/>}
       {page==="map"&&<MapPage pageName={names.map||DEF_NAMES.map} setPageName={makeNameSetter("map")} myRole={myRole} theirRole={theirRole} myName={myName} theirName={theirName}/>}

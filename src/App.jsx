@@ -322,14 +322,20 @@ body{font-family:'Inter',-apple-system,sans-serif;color:var(--ink);-webkit-font-
 .nav-item{display:flex;flex-direction:column;align-items:center;gap:2px;background:none;border:none;cursor:pointer;padding:5px 7px;border-radius:12px;min-width:48px;flex-shrink:0}
 .nav-ic{color:var(--muted);transition:color .2s;display:flex}.nav-lb{font-size:clamp(7px,2vw,9px);font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);transition:color .2s;white-space:nowrap}
 .nav-item.on .nav-ic,.nav-item.on .nav-lb{color:var(--accent)}
-.auth-wrap{position:absolute;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:clamp(24px,6vw,40px) 28px;z-index:90}
+.auth-wrap{position:absolute;inset:0;background:radial-gradient(circle at 50% 18%,${t.rose} 0%,${t.bg} 62%);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:clamp(24px,6vw,40px) 28px;z-index:90;overflow:hidden}
+.auth-wrap::before{content:'';position:absolute;top:-90px;right:-70px;width:220px;height:220px;background:radial-gradient(circle,${t.accent}22,transparent 70%);border-radius:50%;pointer-events:none}
+.auth-wrap::after{content:'';position:absolute;bottom:-100px;left:-80px;width:240px;height:240px;background:radial-gradient(circle,${t.accent}18,transparent 70%);border-radius:50%;pointer-events:none}
+.auth-wrap>*{position:relative;z-index:1}
 .auth-heart{font-size:clamp(40px,11vw,52px);margin-bottom:16px;animation:hb 2.4s ease-in-out infinite}@keyframes hb{0%,100%{transform:scale(1)}35%{transform:scale(1.09)}65%{transform:scale(1)}}
 .auth-title{font-family:'Cormorant Garamond',serif;font-size:clamp(34px,9vw,42px);font-weight:600;font-style:italic;color:var(--ink);margin-bottom:4px}
 .auth-sub{font-size:13px;color:var(--slate);margin-bottom:28px;text-align:center;line-height:1.7}
 .auth-field{width:100%;padding:13px 16px;border:1.5px solid var(--border);border-radius:13px;background:var(--sf);font-size:15px;color:var(--ink);outline:none;margin-bottom:10px}
 .auth-field:focus{border-color:var(--aclt)}.auth-field.err{border-color:#e05050;animation:shake .4s ease}
 @keyframes shake{0%,100%{transform:none}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}
-.nfc-wrap{position:absolute;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 32px;z-index:80}
+.nfc-wrap{position:absolute;inset:0;background:radial-gradient(circle at 50% 18%,${t.rose} 0%,${t.bg} 62%);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 32px;z-index:80;overflow:hidden}
+.nfc-wrap::before{content:'';position:absolute;top:-90px;right:-70px;width:220px;height:220px;background:radial-gradient(circle,${t.accent}22,transparent 70%);border-radius:50%;pointer-events:none}
+.nfc-wrap::after{content:'';position:absolute;bottom:-100px;left:-80px;width:240px;height:240px;background:radial-gradient(circle,${t.accent}18,transparent 70%);border-radius:50%;pointer-events:none}
+.nfc-wrap>*{position:relative;z-index:1}
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);z-index:50;display:flex;align-items:flex-end;animation:fadeIn .18s ease}@keyframes fadeIn{from{opacity:0}to{opacity:1}}
 .sheet{background:var(--sf);border-radius:24px 24px 0 0;padding:14px 18px calc(env(safe-area-inset-bottom,0px) + 32px);width:100%;max-height:88vh;overflow-y:auto;animation:slideUp .24s cubic-bezier(.32,0,.16,1)}@keyframes slideUp{from{transform:translateY(100%)}to{transform:none}}
 .sh-handle{width:34px;height:4px;background:var(--border);border-radius:2px;margin:0 auto 14px}
@@ -468,7 +474,7 @@ function EditTitle({value,onSave}){
 /* ═══════════════════════════════════════════
    BIOMETRIC GATE  (Face ID / Touch ID / Fingerprint)
 ═══════════════════════════════════════════ */
-function BiometricGate({onPass,onSkip}){
+function BiometricGate({onPass,onUnsupported}){
   const[state,setState]=useState("idle"); // idle|working|done|notsupported
   const[errMsg,setErrMsg]=useState("");
   const CRED="us_bio";
@@ -540,9 +546,9 @@ function BiometricGate({onPass,onSkip}){
       <div style={{fontSize:"clamp(44px,12vw,56px)",marginBottom:16}}>🔐</div>
       <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(22px,6vw,28px)",fontWeight:600,color:"var(--ink)",marginBottom:10,textAlign:"center"}}>Biometric unavailable</h2>
       <p style={{fontSize:14,color:"var(--muted)",textAlign:"center",lineHeight:1.75,maxWidth:280,marginBottom:24}}>
-        This browser or device doesn't support Face ID / fingerprint unlock. You can still use the app with just your NFC tag.
+        This browser or device doesn't support Face ID / fingerprint unlock. You'll unlock with your NFC tag alone instead.
       </p>
-      <button className="btn-p" style={{maxWidth:260,width:"100%"}} onClick={onSkip}>Continue →</button>
+      <button className="btn-p" style={{maxWidth:260,width:"100%"}} onClick={onUnsupported}>Continue →</button>
     </div>
   );
 
@@ -567,7 +573,7 @@ function BiometricGate({onPass,onSkip}){
       <p style={{fontSize:14,color:"var(--muted)",textAlign:"center",lineHeight:1.75,maxWidth:280,marginBottom:24}}>
         {hasCredential
           ?"Use Face ID or fingerprint to unlock us."
-          :"Add Face ID or fingerprint as a second lock. You only do this once."}
+          :"Required — set up Face ID or fingerprint now. You only register once; every unlock after this uses it instead of your password."}
       </p>
       {errMsg&&<p style={{color:"#e05050",fontSize:13,textAlign:"center",marginBottom:16,maxWidth:260}}>{errMsg}</p>}
       <button className="btn-p" style={{maxWidth:260,width:"100%",marginBottom:14}} onClick={doWebAuthn}>
@@ -576,7 +582,6 @@ function BiometricGate({onPass,onSkip}){
       {hasCredential&&<button className="btn-g" style={{marginBottom:8}} onClick={()=>{ss(CRED,null);setErrMsg("Cleared. Tap above to re-register.");}}>
         Reset biometric
       </button>}
-      <button className="btn-g" onClick={onSkip}>Skip for now</button>
     </div>
   );
 }
@@ -1296,46 +1301,105 @@ function DatesPage({pageName,setPageName}){
 /* ═══════════════════════════════════════════
    MAP PAGE
 ═══════════════════════════════════════════ */
-function MapPage({pageName,setPageName,myRole,theirRole}){
+function MapPage({pageName,setPageName,myRole,theirRole,myName,theirName}){
   const[memories,setMemories]=useSync("map_memories",[]);
   const[myLoc,setMyLoc]=useSync("loc_"+myRole,null);
   const[theirLoc]=useSync("loc_"+theirRole,null);
-  const[selId,setSelId]=useState(null);const[adding,setAdding]=useState(false);
+  const[myPhoto]=useSync("photo_"+myRole,null);
+  const[theirPhoto]=useSync("photo_"+theirRole,null);
+  const[selId,setSelId]=useState(null);
+  const[view,setView]=useState("me"); // "me" | "them" — cleared when a memory is selected
+  const[adding,setAdding]=useState(false);
   const[pending,setPending]=useState(null);const[noteText,setNoteText]=useState("");
   const[gettingLoc,setGettingLoc]=useState(false);
   const[ask,confirmDialog]=useConfirm();
   const dist=myLoc&&theirLoc?hav(myLoc.lat,myLoc.lon,theirLoc.lat,theirLoc.lon):null;
-  const focus=memories.find(m=>m.id===selId)||(myLoc?{lat:myLoc.lat,lon:myLoc.lon}:null)||memories[memories.length-1];
-  const lat=focus?.lat??51.505,lon=focus?.lon??-0.09,delta=0.06;
+  const pct=dist!=null?Math.max(4,Math.min(96,100-dist/5)):null;
+
+  const selectedMemory=memories.find(m=>m.id===selId);
+  const focus=selectedMemory
+    ?{lat:selectedMemory.lat,lon:selectedMemory.lon,label:selectedMemory.note,emoji:"💝",sub:fmtD(selectedMemory.ts)}
+    :view==="them"&&theirLoc?{lat:theirLoc.lat,lon:theirLoc.lon,label:theirName,emoji:"💁",sub:ago(theirLoc.ts)}
+    :myLoc?{lat:myLoc.lat,lon:myLoc.lon,label:myName,emoji:"🙋",sub:ago(myLoc.ts)}
+    :theirLoc?{lat:theirLoc.lat,lon:theirLoc.lon,label:theirName,emoji:"💁",sub:ago(theirLoc.ts)}
+    :memories.length?{lat:memories[memories.length-1].lat,lon:memories[memories.length-1].lon,label:memories[memories.length-1].note,emoji:"💝",sub:fmtD(memories[memories.length-1].ts)}
+    :null;
+  const lat=focus?.lat??51.505,lon=focus?.lon??-0.09,delta=0.05;
   const mapSrc=`https://www.openstreetmap.org/export/embed.html?bbox=${lon-delta},${lat-delta},${lon+delta},${lat+delta}&layer=mapnik${focus?`&marker=${lat},${lon}`:""}`;
   const saveMemory=()=>{if(!pending)return;const m={id:Date.now(),lat:pending.lat,lon:pending.lon,note:noteText.trim()||"Memory",ts:Date.now()};setMemories([...memories,m]);setSelId(m.id);setNoteText("");setPending(null);setAdding(false);};
   const delMemory=id=>ask("Delete this memory pin?",()=>{setMemories(memories.filter(m=>m.id!==id));if(selId===id)setSelId(null);});
   const findMe=()=>{
     if(!navigator.geolocation){alert("Geolocation not supported.");return;}
     setGettingLoc(true);
-    navigator.geolocation.getCurrentPosition(p=>{setMyLoc({lat:p.coords.latitude,lon:p.coords.longitude,ts:Date.now()});setGettingLoc(false);},
+    navigator.geolocation.getCurrentPosition(p=>{setMyLoc({lat:p.coords.latitude,lon:p.coords.longitude,ts:Date.now()});setGettingLoc(false);setSelId(null);setView("me");},
       ()=>{setGettingLoc(false);alert("Location access denied.\n\nTo fix: tap the lock icon in your browser address bar → Site Settings → Location → Allow, then try again.");},
       {enableHighAccuracy:true,timeout:12000});
   };
+  const Avatar=({photo,emoji,size=30})=>(
+    <div style={{width:size,height:size,borderRadius:"50%",overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",background:photo?"transparent":"linear-gradient(135deg,var(--accent),color-mix(in srgb,var(--accent) 75%,#f99))",boxShadow:"0 0 0 2px var(--sf)"}}>
+      {photo?<img src={photo} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>:<span style={{fontSize:size*0.5,color:"#fff"}}>{emoji}</span>}
+    </div>
+  );
   return(
     <div className="us-page pf">
       <div className="row-bw"><EditTitle value={pageName} onSave={setPageName}/></div>
-      {dist!=null&&<div style={{background:"var(--rose)",borderRadius:11,padding:"8px 14px",marginBottom:9,fontSize:13,color:"var(--slate)",display:"flex",justifyContent:"space-between",alignItems:"center"}}><span>📍 Distance between you</span><span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:16,fontWeight:600,color:"var(--accent)"}}>{fmtDist(dist)}</span></div>}
-      <div style={{display:"flex",gap:7,marginBottom:9,flexWrap:"wrap"}}>
-        <button className={`btn-sm${gettingLoc?" on":""}`} onClick={findMe}>{gettingLoc?"📡 Locating…":"📍 Find Me"}</button>
-        <button className={`btn-sm${adding?" on":""}`} onClick={()=>setAdding(!adding)}>{adding?"✕ Cancel":"＋ Pin Memory"}</button>
-        {selId&&<button className="btn-sm" onClick={()=>setSelId(null)}>🌍 All</button>}
+
+      {/* Distance hero */}
+      <div className="ctr-card" style={{padding:"16px 18px",marginBottom:10}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,position:"relative",zIndex:1}}>
+          <Avatar photo={myPhoto} emoji="🙋" size={38}/>
+          <div style={{flex:1,minWidth:0}}>
+            <div className="dist-bar" style={{margin:"0 0 4px"}}>
+              {pct!=null&&<div className="dist-fill" style={{width:`${pct}%`}}/>}
+            </div>
+            <div style={{textAlign:"center",fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(15px,4.5vw,19px)",fontWeight:700,color:"var(--ink)"}}>
+              {dist!=null?fmtDist(dist):myLoc&&!theirLoc?`Waiting on ${theirName}…`:!myLoc&&theirLoc?"Share your location":"Distance unknown"}
+            </div>
+          </div>
+          <Avatar photo={theirPhoto} emoji="💁" size={38}/>
+        </div>
+        {myLoc&&theirLoc&&<p style={{position:"relative",zIndex:1,textAlign:"center",fontSize:10,color:"var(--ink)",opacity:.6,marginTop:8,fontWeight:600,letterSpacing:".04em"}}>YOU {ago(myLoc.ts)} · {theirName.toUpperCase()} {ago(theirLoc.ts)}</p>}
       </div>
+
+      {/* Segmented view control */}
+      <div style={{display:"flex",gap:6,marginBottom:10}}>
+        {[{k:"me",l:"🙋 "+myName,on:view==="me"&&!selId},{k:"them",l:"💁 "+theirName,on:view==="them"&&!selId}].map(t=>(
+          <button key={t.k} className={`btn-sm${t.on?" on":""}`} style={{flex:1,textAlign:"center"}} onClick={()=>{setView(t.k);setSelId(null);}}>{t.l}</button>
+        ))}
+        <button className={`btn-i${gettingLoc?" btn-ia":""}`} style={{width:38,height:38,flexShrink:0}} onClick={findMe} title="Update my location">
+          {gettingLoc?<div className="spinner" style={{width:16,height:16,borderWidth:2}}/>:<IcPin/>}
+        </button>
+        <button className={`btn-i${adding?" btn-ia":""}`} style={{width:38,height:38,flexShrink:0}} onClick={()=>setAdding(!adding)} title="Pin a memory">
+          {adding?<IcX/>:<IcPlus/>}
+        </button>
+      </div>
+
       {adding&&<div style={{background:"var(--deep)",borderRadius:10,padding:"8px 12px",marginBottom:9,fontSize:13,display:"flex",gap:7,justifyContent:"center"}}>
         <button style={{background:"var(--accent)",color:"#fff",border:"none",borderRadius:8,padding:"5px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={()=>{setGettingLoc(true);navigator.geolocation?.getCurrentPosition(p=>{setPending({lat:p.coords.latitude,lon:p.coords.longitude});setGettingLoc(false);setAdding(false);},()=>{setPending({lat:51.505,lon:-0.09});setGettingLoc(false);},{enableHighAccuracy:true,timeout:10000});}}>📍 Use GPS</button>
         <button style={{background:"color-mix(in srgb,var(--accent) 12%,transparent)",color:"var(--accent)",border:"none",borderRadius:8,padding:"5px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={()=>{setPending({lat:51.505,lon:-0.09});setAdding(false);}}>✏️ Enter Coords</button>
       </div>}
-      <iframe src={mapSrc} className="map-frame" title="Our Map" loading="lazy" sandbox="allow-scripts allow-same-origin"/>
-      {myLoc&&theirLoc&&<p style={{fontSize:11,color:"var(--muted)",textAlign:"center",marginBottom:8}}>You: {ago(myLoc.ts)} · Them: {ago(theirLoc.ts)}</p>}
-      {memories.length===0?<div className="empty" style={{padding:"22px 20px"}}><div className="empty-e">📍</div><p className="empty-t">No memories pinned yet.</p></div>
-        :<div>{[...memories].reverse().map(m=><div key={m.id} className={`mem-card${selId===m.id?" sel":""}`} onClick={()=>setSelId(selId===m.id?null:m.id)}>
+
+      {/* Map — muted/warm tint over the raw OSM tiles so it matches the app instead of default cartoon colours */}
+      <div style={{position:"relative",marginBottom:8}}>
+        <iframe src={mapSrc} className="map-frame" title="Our Map" loading="lazy" sandbox="allow-scripts allow-same-origin"
+          style={{filter:"grayscale(.3) sepia(.22) saturate(.85) hue-rotate(-6deg) brightness(1.03)",display:"block"}}/>
+        <div style={{position:"absolute",inset:0,borderRadius:"var(--r)",boxShadow:"inset 0 0 0 1.5px color-mix(in srgb,var(--accent) 18%,transparent)",pointerEvents:"none"}}/>
+        {focus&&<div style={{position:"absolute",left:10,bottom:10,display:"flex",alignItems:"center",gap:7,background:"rgba(255,255,255,.92)",backdropFilter:"blur(6px)",borderRadius:50,padding:"6px 12px 6px 6px",boxShadow:"var(--sh-md)"}}>
+          <span style={{width:22,height:22,borderRadius:"50%",background:"var(--accent)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12}}>{focus.emoji}</span>
+          <div style={{lineHeight:1.2}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#1A1512"}}>{focus.label}</div>
+            <div style={{fontSize:10,color:"#7A6560"}}>{focus.sub}</div>
+          </div>
+        </div>}
+      </div>
+
+      {memories.length===0?<div className="empty" style={{padding:"22px 20px"}}><div className="empty-e">📍</div><p className="empty-t">No memories pinned yet.<br/>Tap + above to drop your first one.</p></div>
+        :<div>{[...memories].reverse().map(m=><div key={m.id} className={`mem-card${selId===m.id?" sel":""}`} onClick={()=>{setSelId(selId===m.id?null:m.id);}}>
           <div className="mem-dot"><IcPin/></div>
-          <div style={{flex:1,minWidth:0}}><div style={{fontWeight:600,fontSize:14,marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.note}</div><div className="cap">{fmtDL(m.ts)} · {m.lat.toFixed(3)}, {m.lon.toFixed(3)}</div></div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontWeight:600,fontSize:14,marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.note}</div>
+            <div className="cap">{fmtDL(m.ts)}{myLoc?` · ${fmtDist(hav(myLoc.lat,myLoc.lon,m.lat,m.lon))} from you`:""}</div>
+          </div>
           <button onClick={e=>{e.stopPropagation();delMemory(m.id);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--muted)",display:"flex",padding:3}}><IcTrash/></button>
         </div>)}</div>}
       {pending&&<div className="overlay" onClick={()=>setPending(null)}><div className="sheet" onClick={e=>e.stopPropagation()}>
@@ -1512,8 +1576,9 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
 
   const[bgDraft,setBgDraft]=useState(bgImage||"");
 
-// Intro music
-  const [musicEnabled, setMusicEnabled] = useState(() => gs("music_enabled", false));
+// Intro music — enabled independently per account
+  const [musicEnabledUth, setMusicEnabledUth] = useState(() => gs("music_enabled_uthmaan", false));
+  const [musicEnabledAreebah, setMusicEnabledAreebah] = useState(() => gs("music_enabled_areebah", false));
   const [musicHasFile, setMusicHasFile] = useState(() => !!gs("music_file_b64", null));
   const [musicFileName, setMusicFileName] = useState(() => gs("music_file_name", ""));
   useEffect(()=>{
@@ -1530,7 +1595,11 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
   const [musicMsg, setMusicMsg] = useState("");
   const musicFileRef = useRef();
 
-  const toggleMusic = v => { setMusicEnabled(v); ss("music_enabled", v); dbWrite("room/music_enabled", v); };
+  const toggleMusicFor = (role, v) => {
+    if(role==="uthmaan")setMusicEnabledUth(v); else setMusicEnabledAreebah(v);
+    ss(`music_enabled_${role}`, v);
+    dbWrite(`room/music_enabled_${role}`, v);
+  };
 
   const handleMusicUpload = e => {
     const f = e.target.files[0]; if (!f) return;
@@ -1595,8 +1664,10 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
 
     let unsubB64 = null;
     let unsubName = null;
+    let unsubUth = null;
+    let unsubAreebah = null;
 
-    // 2. Introduce a 1-second delay to let Firebase Auth resolve 
+    // 2. Introduce a 1-second delay to let Firebase Auth resolve
     // and prevent premature unauthorized REST requests.
     const delayTimer = setTimeout(() => {
       try {
@@ -1618,6 +1689,17 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
             }
           });
         }
+
+        // Keep both accounts' enable toggles in sync with the cloud —
+        // either partner can flip the other's switch from this same screen.
+        unsubUth = dbListen("room/music_enabled_uthmaan", v => {
+          ss("music_enabled_uthmaan", !!v);
+          setMusicEnabledUth(!!v);
+        });
+        unsubAreebah = dbListen("room/music_enabled_areebah", v => {
+          ss("music_enabled_areebah", !!v);
+          setMusicEnabledAreebah(!!v);
+        });
       } catch (e) {
         console.log("Database fetch failed on startup:", e.message);
       }
@@ -1627,6 +1709,8 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
       clearTimeout(delayTimer);
       if (typeof unsubB64 === 'function') unsubB64();
       if (typeof unsubName === 'function') unsubName();
+      if (typeof unsubUth === 'function') unsubUth();
+      if (typeof unsubAreebah === 'function') unsubAreebah();
     };
   }, [synced]);
 
@@ -1757,22 +1841,28 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
 
       {/* ── Intro Music ── */}
       <div className="card">
-        <div className="card-hdr">
-          <h3 className="card-title">Intro Music</h3>
-          <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
-            <div onClick={()=>toggleMusic(!musicEnabled)} style={{width:38,height:22,background:musicEnabled?"var(--accent)":"var(--border)",borderRadius:50,position:"relative",transition:".2s",flexShrink:0,cursor:"pointer"}}>
-              <div style={{position:"absolute",top:3,left:musicEnabled?17:3,width:16,height:16,background:"#fff",borderRadius:"50%",transition:".2s",boxShadow:"0 1px 4px rgba(0,0,0,.2)"}}/>
-            </div>
-            <span style={{fontSize:12,fontWeight:500,color:"var(--slate)"}}>{musicEnabled?"On — plays on unlock":"Off"}</span>
-          </label>
-        </div>
+        <h3 className="card-title" style={{marginBottom:8}}>Intro Music</h3>
 
         <p className="cap" style={{marginBottom:14,lineHeight:1.75}}>
-          Upload a song or short clip and it will play automatically the moment the NFC tag is scanned and the app unlocks. A small stop button appears in the corner if you want to pause it.
+          Upload a song or short clip and it plays automatically the moment each account unlocks the app. Turn it on or off per person — the file stays uploaded either way, it just won't play for whoever's switch is off. A small stop button appears in the corner if you want to pause it.
         </p>
 
+        {[
+          {role:"uthmaan",label:ROLE_NAMES.uthmaan,val:musicEnabledUth},
+          {role:"areebah",label:ROLE_NAMES.areebah,val:musicEnabledAreebah},
+        ].map(r=>(
+          <label key={r.role} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,cursor:"pointer",padding:"9px 0",borderBottom:"1px solid var(--border)"}}>
+            <span style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>Play for {r.label}</span>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div onClick={()=>toggleMusicFor(r.role,!r.val)} style={{width:38,height:22,background:r.val?"var(--accent)":"var(--border)",borderRadius:50,position:"relative",transition:".2s",flexShrink:0,cursor:"pointer"}}>
+                <div style={{position:"absolute",top:3,left:r.val?17:3,width:16,height:16,background:"#fff",borderRadius:"50%",transition:".2s",boxShadow:"0 1px 4px rgba(0,0,0,.2)"}}/>
+              </div>
+              <span style={{fontSize:11,fontWeight:500,color:"var(--slate)",width:26}}>{r.val?"On":"Off"}</span>
+            </div>
+          </label>
+        ))}
         {/* Upload audio file */}
-        <div className="lbl" style={{marginBottom:8}}>Audio File (MP3, M4A, AAC — max 8MB)</div>
+        <div className="lbl" style={{marginBottom:8,marginTop:14}}>Audio File (MP3, M4A, AAC — max 8MB)</div>
         {musicHasFile?(
           <div style={{background:"var(--rose)",borderRadius:12,padding:"10px 14px",marginBottom:10,display:"flex",alignItems:"center",gap:10}}>
             <span style={{fontSize:18}}>🎵</span>
@@ -2151,12 +2241,17 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
   // Init Firebase from saved config
   useEffect(()=>{ if(fbApiKey&&fbDbUrl){FIREBASE_API_KEY=fbApiKey;FIREBASE_DB_URL=fbDbUrl;setSynced(true);} },[fbApiKey,fbDbUrl]);
 
-  // Keep the Firebase ID token fresh — every DB read/write needs it (RTDB rules require auth)
+  // Keep the Firebase ID token fresh — every DB read/write needs it (RTDB rules require auth).
+  // Also warm the local cache for room-wide settings (music file + this account's
+  // play toggle) BEFORE flipping tokenReady, so by the time the biometric gate
+  // fires — the very first unlock, not just the second — the data is already
+  // there and intro music can autoplay immediately inside that gesture.
   useEffect(()=>{
     if(!user){setTokenReady(false);return;}
     let cancelled=false;
-    if(FIREBASE_ID_TOKEN){setTokenReady(true);}
-    else refreshFirebaseToken().then(tok=>{
+    (async()=>{
+      let tok=FIREBASE_ID_TOKEN;
+      if(!tok)tok=await refreshFirebaseToken();
       if(cancelled)return;
       if(!tok){
         // Session predates this build (no refreshToken saved) or the refresh
@@ -2166,24 +2261,37 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
         setUser(null);
         return;
       }
+      try{
+        const[myMusicOn,fileB64,fileName,spotify]=await Promise.all([
+          dbGet(`room/music_enabled_${myRole}`),
+          dbGet("room/music_file_b64"),
+          dbGet("room/music_file_name"),
+          dbGet("room/music_spotify_url"),
+        ]);
+        if(myMusicOn!=null)ss(`music_enabled_${myRole}`,!!myMusicOn);
+        if(fileB64!=null)ss("music_file_b64",fileB64);
+        if(fileName!=null)ss("music_file_name",fileName);
+        if(spotify!=null)ss("music_spotify_url",spotify);
+      }catch{}
+      if(cancelled)return;
       setTokenReady(true);
-    });
+    })();
     const iv=setInterval(refreshFirebaseToken,50*60*1000);
     return()=>{cancelled=true;clearInterval(iv);};
-  },[user]);
+  },[user,myRole]);
 
-  // Pull shared intro-music settings from the cloud as soon as the token is ready,
-  // so music uploaded on one phone is cached locally before the other phone unlocks
+  // Keep those same values live for the rest of the session (e.g. partner
+  // uploads a new song, or flips your play toggle, while you're already in)
   useEffect(()=>{
-    if(!tokenReady)return;
+    if(!tokenReady||!myRole)return;
     const unsubs=[
-      dbListen("room/music_enabled",v=>ss("music_enabled",v)),
+      dbListen(`room/music_enabled_${myRole}`,v=>ss(`music_enabled_${myRole}`,!!v)),
       dbListen("room/music_file_b64",v=>ss("music_file_b64",v)),
       dbListen("room/music_file_name",v=>ss("music_file_name",v)),
       dbListen("room/music_spotify_url",v=>ss("music_spotify_url",v)),
     ];
     return()=>unsubs.forEach(u=>u&&u());
-  },[tokenReady]);
+  },[tokenReady,myRole]);
   const setTheme=v=>{setThemeState(v);};
   const setBgImage=v=>{setBgImageState(v);};
   const setMoodEmojis=v=>setMoodEmojisState(v);
@@ -2208,8 +2316,7 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
     setNfcOk(true);
     // Intro check happens after biometric, not here
   };
-  const startIntroMusic=()=>{
-    if(!gs('music_enabled',false))return;
+  const playMusicFile=()=>{
     const b64=gs('music_file_b64',null);
     if(!b64)return;
     try{
@@ -2221,6 +2328,10 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
         .then(()=>setMusicPlaying(true))
         .catch(()=>{}); // autoplay blocked — silently fail
     }catch(e){}
+  };
+  const startIntroMusic=()=>{
+    if(!myRole||!gs(`music_enabled_${myRole}`,false))return;
+    playMusicFile();
   };
 
   const stopMusic=()=>{
@@ -2235,11 +2346,12 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
     const wantsIntro=gs('show_intro_on_scan',false);
     const isUpdate=seenVersion&&seenVersion!==APP_VERSION;
     if(isFirstTime||wantsIntro||isUpdate)setShowIntro(true);
-    // Start intro music — user gesture from NFC/biometric allows autoplay
-    setTimeout(startIntroMusic,300);
+    // Room data was already warmed before this gate rendered (see the
+    // tokenReady effect above), so play right away — still inside the
+    // WebAuthn gesture's activation window, no artificial delay needed.
+    startIntroMusic();
   };
   if(!nfcOk)return(<ErrorBoundary><div className="us-app"><style>{buildCSS(theme,bgImage)}</style><NFCGate onPass={handleNfcPass}/></div></ErrorBoundary>);
-  if(!bioOk)return(<ErrorBoundary><div className="us-app"><style>{buildCSS(theme,bgImage)}</style><BiometricGate onPass={handleBioPass} onSkip={handleBioPass}/></div></ErrorBoundary>);
   if(!user)return(<ErrorBoundary><div className="us-app"><style>{buildCSS(theme,bgImage)}</style><AuthScreen
     onAuth={onAuth}
     initFbKey={fbApiKey}
@@ -2256,6 +2368,7 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
   /></div></ErrorBoundary>
   );
   if(!tokenReady)return(<ErrorBoundary><div className="us-app"><style>{buildCSS(theme,bgImage)}</style><div className="nfc-wrap"><div style={{fontSize:"clamp(44px,12vw,56px)",marginBottom:16}}>💕</div><div className="spinner" style={{margin:"16px auto"}}/></div></div></ErrorBoundary>);
+  if(!bioOk)return(<ErrorBoundary><div className="us-app"><style>{buildCSS(theme,bgImage)}</style><BiometricGate onPass={handleBioPass} onUnsupported={handleBioPass}/></div></ErrorBoundary>);
   return(
     <ErrorBoundary>
     <div className="us-app">
@@ -2271,10 +2384,10 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
       {page==="me"&&<MePage myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} pageName={names.me||DEF_NAMES.me} setPageName={makeNameSetter("me")} myRole={myRole}/>}
       {page==="fridge"&&<FridgePage pageName={names.fridge||DEF_NAMES.fridge} setPageName={makeNameSetter("fridge")}/>}
       {page==="dates"&&<DatesPage pageName={names.dates||DEF_NAMES.dates} setPageName={makeNameSetter("dates")}/>}
-      {page==="map"&&<MapPage pageName={names.map||DEF_NAMES.map} setPageName={makeNameSetter("map")} myRole={myRole} theirRole={theirRole}/>}
+      {page==="map"&&<MapPage pageName={names.map||DEF_NAMES.map} setPageName={makeNameSetter("map")} myRole={myRole} theirRole={theirRole} myName={myName} theirName={theirName}/>}
       {page==="gallery"&&<GalleryPage pageName={names.gallery||DEF_NAMES.gallery} setPageName={makeNameSetter("gallery")} myName={myName}/>}
       {page==="notes"&&<NotesPage pageName={names.notes||DEF_NAMES.notes} setPageName={makeNameSetter("notes")}/>}
-      {page==="settings"&&<SettingsPage pageName={names.settings||DEF_NAMES.settings} setPageName={makeNameSetter("settings")} theme={theme} setTheme={setTheme} bgImage={bgImage} setBgImage={setBgImage} names={names} setNames={setNames} myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} fbApiKey={fbApiKey} setFbApiKey={setFbApiKey} fbDbUrl={fbDbUrl} setFbDbUrl={setFbDbUrl} synced={synced} onReplayIntro={()=>setShowIntro(true)} onTestMusic={startIntroMusic} musicPlaying={musicPlaying} stopMusic={stopMusic}/>}
+      {page==="settings"&&<SettingsPage pageName={names.settings||DEF_NAMES.settings} setPageName={makeNameSetter("settings")} theme={theme} setTheme={setTheme} bgImage={bgImage} setBgImage={setBgImage} names={names} setNames={setNames} myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} fbApiKey={fbApiKey} setFbApiKey={setFbApiKey} fbDbUrl={fbDbUrl} setFbDbUrl={setFbDbUrl} synced={synced} onReplayIntro={()=>setShowIntro(true)} onTestMusic={playMusicFile} musicPlaying={musicPlaying} stopMusic={stopMusic}/>}
       <BottomNav page={page} nav={setPage} names={names}/>
     </div>
     </ErrorBoundary>

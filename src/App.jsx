@@ -154,55 +154,16 @@ async function compressImg(file,maxPx=1080,q=0.65){
   });
 }
 
-/* ── AI place research (Anthropic API) ──────────────────── */
-function extractJsonArray(text){
-  const clean=text.replace(/```[a-z]*\n?/gi,"").replace(/```/g,"").trim();
-  const start=clean.indexOf("[");
-  if(start===-1)return null;
-  let depth=0,inStr=false,esc=false;
-  for(let i=start;i<clean.length;i++){
-    const ch=clean[i];
-    if(esc){esc=false;continue;}
-    if(ch==="\\"&&inStr){esc=true;continue;}
-    if(ch==='"'){inStr=!inStr;continue;}
-    if(inStr)continue;
-    if(ch==="["||ch==="{")depth++;
-    else if(ch==="]"||ch==="}"){depth--;if(depth===0&&ch==="]")return clean.slice(start,i+1);}
-  }
-  return null;
-}
-
+/* ── Free place research (OpenStreetMap — no API key, no cost) ─ */
 async function researchPlaces(dateType,location){
-  const prompt=`You are helping plan a date. Search the web and find 4 REAL specific venues for a "${dateType}" date in or near "${location}".
-
-Search for each venue. For each one find its real name, full address, star rating, halal status (search website + Google listing + reviews — quote EXACT text found), cost per person, cost for 2 people, and a one-line description.
-
-After searching, respond with ONLY a valid JSON array — nothing before or after it, no markdown, no explanation. Start with [ and end with ].
-
-[{"name":"Exact name","address":"Full address","rating":4.3,"isHalal":true,"halalSource":"Where found","halalQuote":"Exact text from listing","costOne":"£15-20","costTwo":"£30-40","description":"One sentence","website":"https://..."}]
-
-isHalal: true=confirmed halal, false=confirmed NOT halal (alcohol/pork on premises), null=unknown after searching`;
-
-  const resp=await fetch("/.netlify/functions/ai",{
+  const resp=await fetch("/.netlify/functions/places",{
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({
-      model:"claude-sonnet-4-6",
-      max_tokens:3000,
-      tools:[{"type":"web_search_20260209","name":"web_search"}],
-      messages:[{role:"user",content:prompt}]
-    })
+    body:JSON.stringify({dateType,location})
   });
-  if(!resp.ok){
-    const e=await resp.json().catch(()=>({}));
-    throw new Error(e.error||"Server error "+resp.status+". Check ANTHROPIC_API_KEY is set in Netlify env vars.");
-  }
-  const data=await resp.json();
-  if(data.error)throw new Error(data.error.message||"API error");
-  const text=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
-  const jsonStr=extractJsonArray(text);
-  if(!jsonStr)return[];
-  try{const p=JSON.parse(jsonStr);return Array.isArray(p)?p:[];}catch{return[];}
+  const data=await resp.json().catch(()=>({}));
+  if(!resp.ok||data.error)throw new Error(data.error||"Server error "+resp.status+".");
+  return Array.isArray(data.results)?data.results:[];
 }
 
 /* ── Defaults ───────────────────────────────────────────── */
@@ -342,10 +303,12 @@ body{font-family:'Inter',-apple-system,sans-serif;color:var(--ink);-webkit-font-
 .sh-title{font-family:'Cormorant Garamond',serif;font-size:20px;font-weight:600;color:var(--ink);margin-bottom:12px}
 .field{width:100%;padding:11px 13px;border:1.5px solid var(--border);border-radius:12px;background:color-mix(in srgb,var(--ink) 4%,transparent);font-size:14px;color:var(--ink);outline:none;resize:none;transition:border-color .2s}.field:focus{border-color:var(--aclt);background:var(--sf)}
 .fridge-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.sticky{border-radius:14px;padding:12px 12px 26px;min-height:108px;box-shadow:var(--sh);position:relative}
+.sticky{border-radius:14px;padding:12px 12px 30px;height:150px;box-shadow:var(--sh);position:relative;cursor:pointer;transition:transform .12s}
+.sticky:active{transform:scale(.97)}
 .sticky-del{position:absolute;top:7px;right:7px;width:20px;height:20px;background:rgba(0,0,0,.1);border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;color:rgba(0,0,0,.45)}
-.sticky-txt{font-size:13px;line-height:1.6;color:var(--ink);word-break:break-word}
-.sticky-date{position:absolute;bottom:8px;left:12px;font-size:10px;color:rgba(0,0,0,.32);font-weight:500}
+.sticky-txt{font-size:13px;line-height:1.55;color:var(--ink);word-break:break-word;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:5;overflow:hidden}
+.sticky-date{position:absolute;bottom:9px;left:12px;font-size:10px;color:rgba(0,0,0,.32);font-weight:500}
+.sticky-author{position:absolute;bottom:9px;right:12px;font-size:9px;font-weight:700;letter-spacing:.04em;color:rgba(0,0,0,.35)}
 .col-row{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 2px}.col-dot{width:26px;height:26px;border-radius:50%;border:none;cursor:pointer}.col-dot.sel{box-shadow:0 0 0 2.5px var(--sf),0 0 0 4.5px var(--accent)}
 .tab-row{display:flex;border-bottom:1px solid var(--border);margin-bottom:12px;overflow-x:auto}
 .tab{flex-shrink:0;padding:8px 12px;background:none;border:none;border-bottom:2px solid transparent;font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;cursor:pointer;color:var(--muted);transition:.15s;white-space:nowrap}.tab.on{border-bottom-color:var(--accent);color:var(--accent)}
@@ -471,6 +434,30 @@ function EditTitle({value,onSave}){
   return(<div className="editable-title"><span className="sec-title" style={{marginBottom:0}}>{value}</span><button className="edit-pen" onClick={()=>{setDr(value);setEd(true);}}><IcPen/></button></div>);
 }
 
+/* ── Settings row + sheet — tap a row, a focused sheet pops up ──────────── */
+function SettingsRow({label,value,onClick}){
+  return(
+    <button className="srow" style={{width:"100%",background:"none",border:"none",cursor:"pointer",textAlign:"left"}} onClick={onClick}>
+      <span style={{fontSize:14,fontWeight:500,color:"var(--ink)"}}>{label}</span>
+      <span style={{display:"flex",alignItems:"center",gap:6}}>
+        {value&&<span className="cap">{value}</span>}
+        <span style={{display:"flex",color:"var(--muted)",transform:"rotate(-90deg)"}}><IcChevD/></span>
+      </span>
+    </button>
+  );
+}
+function SettingsSheet({title,onClose,children}){
+  return(
+    <div className="overlay" onClick={onClose}>
+      <div className="sheet" onClick={e=>e.stopPropagation()}>
+        <div className="sh-handle"/>
+        <h3 className="sh-title">{title}</h3>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 /* ═══════════════════════════════════════════
    BIOMETRIC GATE  (Face ID / Touch ID / Fingerprint)
 ═══════════════════════════════════════════ */
@@ -490,49 +477,54 @@ function BiometricGate({onPass,onUnsupported}){
     }
   },[]);
 
+  // Registration uses a resident/discoverable credential, which the platform
+  // authenticator stores in its own secure enclave — NOT in this browser's
+  // localStorage. That's what makes it survive a history/site-data clear:
+  // there's nothing local for the clear to wipe. `gs(CRED,...)` below is
+  // only ever a cosmetic hint for which copy to show; the real check is
+  // always attempting an actual unlock first.
   const doWebAuthn=async()=>{
     setState("working"); setErrMsg("");
-    const existing=gs(CRED,null);
+    const challenge=window.crypto.getRandomValues(new Uint8Array(32));
     try{
-      if(existing){
-        // ── Authenticate with stored credential ──
-        const rawId=new Uint8Array(atob(existing).split("").map(c=>c.charCodeAt(0)));
-        const challenge=window.crypto.getRandomValues(new Uint8Array(32));
-        await navigator.credentials.get({
-          publicKey:{
-            challenge,
-            rpId:window.location.hostname,
-            allowCredentials:[{type:"public-key",id:rawId}],
-            userVerification:"required",
-            timeout:60000,
-          }
-        });
-        setState("done"); onPass();
-      } else {
-        // ── Register new credential ──
-        const challenge=window.crypto.getRandomValues(new Uint8Array(32));
-        const cred=await navigator.credentials.create({
-          publicKey:{
-            challenge,
-            rp:{name:"us.",id:window.location.hostname},
-            user:{id:new Uint8Array([1,2,3]),name:"us.user",displayName:"us."},
-            pubKeyCredParams:[{type:"public-key",alg:-7},{type:"public-key",alg:-257}],
-            authenticatorSelection:{authenticatorAttachment:"platform",userVerification:"required"},
-            timeout:60000,
-          }
-        });
-        const id=btoa(String.fromCharCode(...new Uint8Array(cred.rawId)));
-        ss(CRED,id);
-        setState("done"); onPass();
+      // Always try unlocking with whatever passkey this device already has
+      // for this site first — works even after localStorage was wiped.
+      await navigator.credentials.get({
+        publicKey:{
+          challenge,
+          rpId:window.location.hostname,
+          userVerification:"required",
+          timeout:60000,
+        }
+      });
+      ss(CRED,"1");
+      setState("done"); onPass();
+      return;
+    }catch(e){
+      // Only fall through to registering a new one if it looks like there's
+      // genuinely nothing registered yet on this device. Anything else
+      // (user cancelled, timed out) should stay on this screen as an error.
+      if(e.name!=="NotAllowedError"){
+        setState("idle"); setErrMsg(e.message||"Unknown error"); return;
       }
+    }
+    try{
+      const cred=await navigator.credentials.create({
+        publicKey:{
+          challenge:window.crypto.getRandomValues(new Uint8Array(32)),
+          rp:{name:"us.",id:window.location.hostname},
+          user:{id:window.crypto.getRandomValues(new Uint8Array(16)),name:"us.user",displayName:"us."},
+          pubKeyCredParams:[{type:"public-key",alg:-7},{type:"public-key",alg:-257}],
+          authenticatorSelection:{authenticatorAttachment:"platform",residentKey:"required",requireResidentKey:true,userVerification:"required"},
+          timeout:60000,
+        }
+      });
+      if(cred)ss(CRED,"1");
+      setState("done"); onPass();
     }catch(e){
       setState("idle");
       if(e.name==="NotAllowedError"){
         setErrMsg("Biometric was cancelled or not recognised. Try again.");
-      } else if(e.name==="InvalidStateError"){
-        // Credential may be corrupted — clear and let them re-register
-        ss(CRED,null);
-        setErrMsg("Credential error — cleared. Tap again to re-register.");
       } else {
         setErrMsg(e.message||"Unknown error");
       }
@@ -579,9 +571,6 @@ function BiometricGate({onPass,onUnsupported}){
       <button className="btn-p" style={{maxWidth:260,width:"100%",marginBottom:14}} onClick={doWebAuthn}>
         {hasCredential?"🔐 Unlock with Biometric":"👆 Set Up Biometric"}
       </button>
-      {hasCredential&&<button className="btn-g" style={{marginBottom:8}} onClick={()=>{ss(CRED,null);setErrMsg("Cleared. Tap above to re-register.");}}>
-        Reset biometric
-      </button>}
     </div>
   );
 }
@@ -1137,18 +1126,56 @@ function PartnerProfilePage({theirName,startDate,theirRole}){
 /* ═══════════════════════════════════════════
    FRIDGE PAGE
 ═══════════════════════════════════════════ */
-function FridgePage({pageName,setPageName}){
+function FridgePage({pageName,setPageName,myRole}){
   const[notes,setNotes]=useSync("fridge_notes",[]);
   const[modal,setModal]=useState(false);const[txt,setTxt]=useState("");const[col,setCol]=useState(NOTE_COLS[0]);
+  const[editingId,setEditingId]=useState(null);
+  const[expandId,setExpandId]=useState(null);
   const[ask,confirmDialog]=useConfirm();
-  const add=()=>{if(!txt.trim())return;setNotes([...notes,{id:Date.now(),text:txt.trim(),color:col,ts:Date.now()}]);setTxt("");setModal(false);};
-  const del=id=>ask("Delete this note?",()=>setNotes(notes.filter(n=>n.id!==id)));
+  // Notes stuck before this feature shipped have no author — treat those as
+  // editable by either of you rather than locking them to nobody.
+  const isMine=n=>!n.author||n.author===myRole;
+  const openNew=()=>{setEditingId(null);setTxt("");setCol(NOTE_COLS[0]);setModal(true);};
+  const openEdit=n=>{setEditingId(n.id);setTxt(n.text);setCol(n.color);setModal(true);setExpandId(null);};
+  const save=()=>{
+    if(!txt.trim())return;
+    if(editingId)setNotes(notes.map(n=>n.id===editingId?{...n,text:txt.trim(),color:col}:n));
+    else setNotes([...notes,{id:Date.now(),text:txt.trim(),color:col,ts:Date.now(),author:myRole}]);
+    setTxt("");setModal(false);setEditingId(null);
+  };
+  const del=id=>ask("Delete this note?",()=>{setNotes(notes.filter(n=>n.id!==id));setExpandId(null);});
+  const expanded=notes.find(n=>n.id===expandId);
   return(
     <div className="us-page pf">
-      <div className="row-bw"><EditTitle value={pageName} onSave={setPageName}/><button className="btn-i btn-ia" onClick={()=>setModal(true)}><IcPlus/></button></div>
+      <div className="row-bw"><EditTitle value={pageName} onSave={setPageName}/><button className="btn-i btn-ia" onClick={openNew}><IcPlus/></button></div>
       {notes.length===0?<div className="empty"><div className="empty-e">📋</div><p className="empty-t">Nothing here yet.<br/>Stick a note!</p></div>
-        :<div className="fridge-grid">{notes.map(n=><div key={n.id} className="sticky" style={{background:n.color}}><button className="sticky-del" onClick={()=>del(n.id)}><IcX/></button><p className="sticky-txt">{n.text}</p><span className="sticky-date">{fmtD(n.ts)}</span></div>)}</div>}
-      {modal&&<div className="overlay" onClick={()=>setModal(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="sh-handle"/><h3 className="sh-title">New Note</h3><textarea className="field" rows={4} placeholder="What's on your mind…" value={txt} onChange={e=>setTxt(e.target.value)} autoFocus style={{marginBottom:8}}/><div className="col-row">{NOTE_COLS.map(c=><button key={c} className={`col-dot${col===c?" sel":""}`} style={{background:c}} onClick={()=>setCol(c)}/>)}</div><button className="btn-p" onClick={add}>Stick It</button></div></div>}
+        :<div className="fridge-grid">{[...notes].reverse().map(n=>(
+          <div key={n.id} className="sticky" style={{background:n.color}} onClick={()=>setExpandId(n.id)}>
+            <p className="sticky-txt">{n.text}</p>
+            <span className="sticky-date">{fmtD(n.ts)}</span>
+            {n.author&&<span className="sticky-author">{ROLE_NAMES[n.author]}</span>}
+          </div>
+        ))}</div>}
+
+      {/* Read / expand sheet */}
+      {expanded&&<div className="overlay" onClick={()=>setExpandId(null)}>
+        <div className="sheet" onClick={e=>e.stopPropagation()}>
+          <div className="sh-handle"/>
+          <div style={{background:expanded.color,borderRadius:14,padding:"16px 16px 14px",marginBottom:12,maxHeight:"45vh",overflowY:"auto"}}>
+            <p style={{fontSize:14,lineHeight:1.7,color:"#1A1512",whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{expanded.text}</p>
+          </div>
+          <p className="cap" style={{marginBottom:16}}>{expanded.author?`${ROLE_NAMES[expanded.author]} · `:""}{fmtDL(expanded.ts)}</p>
+          {isMine(expanded)?(
+            <div className="conf-row">
+              <button className="btn-p" style={{background:"var(--rose)",color:"var(--ink)"}} onClick={()=>openEdit(expanded)}>✏️ Edit</button>
+              <button className="btn-p danger" onClick={()=>del(expanded.id)}>Delete</button>
+            </div>
+          ):<button className="btn-p" style={{background:"var(--rose)",color:"var(--ink)"}} onClick={()=>setExpandId(null)}>Close</button>}
+        </div>
+      </div>}
+
+      {/* New / edit sheet */}
+      {modal&&<div className="overlay" onClick={()=>setModal(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="sh-handle"/><h3 className="sh-title">{editingId?"Edit Note":"New Note"}</h3><textarea className="field" rows={4} placeholder="What's on your mind…" value={txt} onChange={e=>setTxt(e.target.value)} autoFocus style={{marginBottom:8}}/><div className="col-row">{NOTE_COLS.map(c=><button key={c} className={`col-dot${col===c?" sel":""}`} style={{background:c}} onClick={()=>setCol(c)}/>)}</div><button className="btn-p" onClick={save}>{editingId?"Save Changes":"Stick It"}</button></div></div>}
       {confirmDialog}
     </div>
   );
@@ -1308,6 +1335,7 @@ function DatesPage({pageName,setPageName}){
                 </div>
                 {pl.halalQuote&&<div className="place-quote">"{pl.halalQuote}"<br/><span style={{fontSize:10,opacity:.7}}>Source: {pl.halalSource}</span></div>}
                 {pl.description&&<p style={{fontSize:13,color:"var(--slate)",marginBottom:10}}>{pl.description}</p>}
+                {pl.website&&<a href={pl.website} target="_blank" rel="noopener noreferrer" style={{fontSize:12,color:"var(--accent)",display:"block",marginBottom:10,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} onClick={e=>e.stopPropagation()}>🔗 {pl.website.replace(/^https?:\/\//,"")}</a>}
                 <button className="btn-p" onClick={()=>setSelectedPlace(pl)}>Plan This Date →</button>
               </div>
             ))}
@@ -1607,6 +1635,8 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
   onReplayIntro,onTestMusic,musicPlaying,stopMusic}){
 
   const[bgDraft,setBgDraft]=useState(bgImage||"");
+  const[sheet,setSheet]=useState(null); // which settings sheet is open, if any
+  const closeSheet=()=>setSheet(null);
 
 // Intro music — enabled independently per account
   const [musicEnabledUth, setMusicEnabledUth] = useState(() => gs("music_enabled_uthmaan", false));
@@ -1798,9 +1828,9 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
     <div className="us-page pf">
       <div className="row-bw"><EditTitle value={pageName} onSave={setPageName}/></div>
 
-      {/* ── Theme ── */}
+      {/* ── Appearance ── */}
       <div className="card">
-        <h3 className="card-title" style={{marginBottom:12}}>Theme</h3>
+        <h3 className="card-title" style={{marginBottom:12}}>Appearance</h3>
         <div className="theme-grid">
           {Object.entries(THEMES).map(([k,t])=>(
             <button key={k} className={`theme-card${theme===k?" sel":""}`}
@@ -1811,129 +1841,50 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
             </button>
           ))}
         </div>
-        <div className="lbl" style={{marginBottom:5}}>Background Image URL</div>
-        <input className="field" placeholder="https://… or leave blank for solid colour"
-          value={bgDraft} onChange={e=>setBgDraft(e.target.value)} style={{marginBottom:10}}/>
-        <button className="btn-p" onClick={()=>setBgImage(bgDraft||null)}>Apply Background</button>
+        <SettingsRow label="Background Image" value={bgImage?"Custom":"Default"} onClick={()=>{setBgDraft(bgImage||"");setSheet("bg");}}/>
       </div>
 
-      {/* ── Page Names ── */}
+      {/* ── Names & Story ── */}
       <div className="card">
-        <h3 className="card-title" style={{marginBottom:12}}>Page Names</h3>
-        {Object.entries(nameDraft).map(([k,v])=>(
-          <div key={k} className="srow">
-            <span style={{fontSize:13,color:"var(--slate)",textTransform:"capitalize",width:80}}>{k}</span>
-            <input className="field" style={{flex:1,padding:"5px 8px",fontSize:13}} value={v}
-              onChange={e=>setNameDraft(d=>({...d,[k]:e.target.value}))}/>
-          </div>
-        ))}
-        <button className="btn-p" style={{marginTop:12}} onClick={()=>setNames(nameDraft)}>Save Names</button>
-      </div>
-
-      {/* ── Profile ── */}
-      <div className="card">
-        <h3 className="card-title" style={{marginBottom:12}}>Profile</h3>
-        {[{l:"Your Name",v:sN,s:setSN},{l:"Their Name",v:sT,s:setST}].map(f=>(
-          <div key={f.l} style={{marginBottom:10}}>
-            <div className="lbl" style={{marginBottom:5}}>{f.l}</div>
-            <input className="field" value={f.v} onChange={e=>f.s(e.target.value)}/>
-          </div>
-        ))}
+        <h3 className="card-title" style={{marginBottom:4}}>Names & Story</h3>
+        <SettingsRow label="Page Names" onClick={()=>{setNameDraft({...names});setSheet("pageNames");}}/>
+        <SettingsRow label="Your Name & Their Name" onClick={()=>{setSN(myName);setST(theirName);setSheet("profile");}}/>
         <div className="srow">
           <span style={{fontSize:14,fontWeight:500,color:"var(--ink)"}}>Together since</span>
           <span className="cap">{new Date(startDate).toLocaleDateString("en-GB",{day:"numeric",month:"long",year:"numeric"})}</span>
         </div>
-        <button className="btn-p" style={{marginTop:12}} onClick={()=>onSettings({myName:sN,theirName:sT,startDate})}>Save Profile</button>
       </div>
 
-      {/* ── Change PINs ── */}
+      {/* ── Privacy & Security ── */}
       <div className="card">
-        <h3 className="card-title" style={{marginBottom:6}}>Change PINs</h3>
-        <p className="cap" style={{marginBottom:14}}>PINs protect the Gallery and Private Notes. Must be exactly 5 digits.</p>
-        <div className="lbl" style={{marginBottom:5}}>Gallery PIN</div>
-        <input className="field" type="password" inputMode="numeric" maxLength={5}
-          placeholder="New 5-digit PIN" value={galDraft}
-          onChange={e=>setGalDraft(e.target.value.replace(/\D/g,"").slice(0,5))}
-          style={{marginBottom:10}}/>
-        <div className="lbl" style={{marginBottom:5}}>Private Notes PIN</div>
-        <input className="field" type="password" inputMode="numeric" maxLength={5}
-          placeholder="New 5-digit PIN" value={notesDraft}
-          onChange={e=>setNotesDraft(e.target.value.replace(/\D/g,"").slice(0,5))}
-          style={{marginBottom:12}}/>
-        {pinMsg&&<p style={{fontSize:13,color:pinMsg.includes("updated")?"#2e7d32":"#e05050",marginBottom:10,textAlign:"center"}}>{pinMsg}</p>}
-        <button className="btn-p" onClick={savePins}>Save PINs</button>
+        <h3 className="card-title" style={{marginBottom:4}}>Privacy & Security</h3>
+        <SettingsRow label="Gallery PIN" value="Change" onClick={()=>{setGalDraft("");setPinMsg("");setSheet("galPin");}}/>
+        <SettingsRow label="Private Notes PIN" value="Change" onClick={()=>{setNotesDraft("");setPinMsg("");setSheet("notesPin");}}/>
       </div>
 
-      {/* ── Welcome screen ── */}
+      {/* ── Welcome & Music ── */}
       <div className="card">
-        <h3 className="card-title" style={{marginBottom:10}}>Welcome Screen</h3>
-        <p className="cap" style={{marginBottom:14}}>Replay the intro walkthrough that plays when you first scan the NFC tag.</p>
-        <button className="btn-p" onClick={onReplayIntro}>💕 Replay Welcome Intro</button>
-      </div>
-
-      {/* ── Intro Music ── */}
-      <div className="card">
-        <h3 className="card-title" style={{marginBottom:8}}>Intro Music</h3>
-
-        <p className="cap" style={{marginBottom:14,lineHeight:1.75}}>
-          Upload a song or short clip and it plays automatically the moment each account unlocks the app. Turn it on or off per person — the file stays uploaded either way, it just won't play for whoever's switch is off. A small stop button appears in the corner if you want to pause it.
-        </p>
-
-        {[
-          {role:"uthmaan",label:ROLE_NAMES.uthmaan,val:musicEnabledUth},
-          {role:"areebah",label:ROLE_NAMES.areebah,val:musicEnabledAreebah},
-        ].map(r=>(
-          <label key={r.role} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,cursor:"pointer",padding:"9px 0",borderBottom:"1px solid var(--border)"}}>
-            <span style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>Play for {r.label}</span>
-            <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <div onClick={()=>toggleMusicFor(r.role,!r.val)} style={{width:38,height:22,background:r.val?"var(--accent)":"var(--border)",borderRadius:50,position:"relative",transition:".2s",flexShrink:0,cursor:"pointer"}}>
-                <div style={{position:"absolute",top:3,left:r.val?17:3,width:16,height:16,background:"#fff",borderRadius:"50%",transition:".2s",boxShadow:"0 1px 4px rgba(0,0,0,.2)"}}/>
+        <h3 className="card-title" style={{marginBottom:4}}>Welcome & Music</h3>
+        <SettingsRow label="Replay Welcome Intro" value="💕" onClick={onReplayIntro}/>
+        <div style={{marginTop:8,marginBottom:4}}>
+          <div className="lbl" style={{marginBottom:6}}>Intro music — plays per account</div>
+          {[
+            {role:"uthmaan",label:ROLE_NAMES.uthmaan,val:musicEnabledUth},
+            {role:"areebah",label:ROLE_NAMES.areebah,val:musicEnabledAreebah},
+          ].map(r=>(
+            <label key={r.role} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,cursor:"pointer",padding:"9px 0",borderBottom:"1px solid var(--border)"}}>
+              <span style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>Play for {r.label}</span>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <div onClick={()=>toggleMusicFor(r.role,!r.val)} style={{width:38,height:22,background:r.val?"var(--accent)":"var(--border)",borderRadius:50,position:"relative",transition:".2s",flexShrink:0,cursor:"pointer"}}>
+                  <div style={{position:"absolute",top:3,left:r.val?17:3,width:16,height:16,background:"#fff",borderRadius:"50%",transition:".2s",boxShadow:"0 1px 4px rgba(0,0,0,.2)"}}/>
+                </div>
+                <span style={{fontSize:11,fontWeight:500,color:"var(--slate)",width:26}}>{r.val?"On":"Off"}</span>
               </div>
-              <span style={{fontSize:11,fontWeight:500,color:"var(--slate)",width:26}}>{r.val?"On":"Off"}</span>
-            </div>
-          </label>
-        ))}
-        {/* Upload audio file */}
-        <div className="lbl" style={{marginBottom:8,marginTop:14}}>Audio File (MP3, M4A, AAC — max 8MB)</div>
-        {musicHasFile?(
-          <div style={{background:"var(--rose)",borderRadius:12,padding:"10px 14px",marginBottom:10,display:"flex",alignItems:"center",gap:10}}>
-            <span style={{fontSize:18}}>🎵</span>
-            <span style={{fontSize:13,fontWeight:500,color:"var(--ink)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{musicFileName||"Audio file"}</span>
-            <button onClick={clearMusicFile} style={{background:"none",border:"none",cursor:"pointer",color:"var(--accent)",fontSize:12,fontWeight:600,flexShrink:0}}>Remove</button>
-          </div>
-        ):(
-          <button className="btn-sm" style={{width:"100%",padding:"11px",marginBottom:10,borderRadius:12,textAlign:"center"}}
-            onClick={()=>musicFileRef.current.click()}>
-            📁 Choose Audio File
-          </button>
-        )}
-        <input ref={musicFileRef} type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg" style={{display:"none"}} onChange={handleMusicUpload}/>
-
-        {/* Spotify link (embed, not autoplay) */}
-        <div className="lbl" style={{marginBottom:6,marginTop:8}}>Spotify Link (optional — shows embed player)</div>
-        <p className="cap" style={{marginBottom:8}}>Paste a Spotify song link. Note: Spotify cannot autoplay in a browser — the uploaded file above is what plays automatically. This just shows a Spotify player for the song.</p>
-        <input className="field" placeholder="https://open.spotify.com/track/…"
-          value={spotifyUrl} onChange={e=>setSpotifyUrl(e.target.value)}
-          style={{marginBottom:8}}/>
-        <button className="btn-sm" onClick={saveSpotify}>Save Spotify Link</button>
-
-        {/* Spotify embed preview */}
-        {spotifyUrl&&(()=>{
-          const match=spotifyUrl.match(/track\/([a-zA-Z0-9]+)/);
-          if(!match)return<p className="cap" style={{marginTop:8,color:"#e05050"}}>Invalid Spotify link. Paste a full track URL.</p>;
-          return(
-            <iframe
-              src={`https://open.spotify.com/embed/track/${match[1]}?utm_source=generator&theme=0`}
-              width="100%" height="80" frameBorder="0"
-              allow="autoplay; clipboard-write; encrypted-media; picture-in-picture"
-              style={{borderRadius:12,marginTop:12,border:"none"}}
-            />
-          );
-        })()}
-
-        {musicMsg&&<p style={{fontSize:12,color:"var(--accent)",marginTop:10,fontWeight:500}}>{musicMsg}</p>}
-
-        {/* Test button */}
+            </label>
+          ))}
+        </div>
+        <SettingsRow label="Audio File" value={musicHasFile?(musicFileName||"Set"):"None"} onClick={()=>setSheet("musicFile")}/>
+        <SettingsRow label="Spotify Link" value={spotifyUrl?"Set":"None"} onClick={()=>setSheet("spotify")}/>
         {musicHasFile&&<button className="btn-p" style={{marginTop:12}} onClick={musicPlaying?stopMusic:onTestMusic}>
           {musicPlaying?"⏹ Stop Music":"▶ Test Music Now"}
         </button>}
@@ -1954,26 +1905,13 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
           </div>
         ):(
           <div>
-            <p style={{fontSize:11,fontWeight:700,color:"var(--accent)",letterSpacing:".08em",marginBottom:16,textTransform:"uppercase"}}>🔓 Advanced Unlocked</p>
+            <p style={{fontSize:11,fontWeight:700,color:"var(--accent)",letterSpacing:".08em",marginBottom:8,textTransform:"uppercase"}}>🔓 Advanced Unlocked</p>
 
-            {/* Firebase sync */}
-            <div style={{borderBottom:"1px solid var(--border)",paddingBottom:16,marginBottom:16}}>
-              <div className="lbl" style={{marginBottom:4}}>Real-Time Sync</div>
-              <p className="cap" style={{marginBottom:10}}><span className={`sync-dot ${synced?"on":"off"}`}/>{synced?"Connected — both phones sync live":"Not connected — local only"}</p>
-              <div className="lbl" style={{marginBottom:4}}>Firebase Web API Key</div>
-              <input className="field" placeholder="AIzaSy…" value={apiDraft}
-                onChange={e=>setApiDraft(e.target.value)} style={{marginBottom:8}}/>
-              <div className="lbl" style={{marginBottom:4}}>Realtime Database URL</div>
-              <input className="field" placeholder="https://…firebasedatabase.app"
-                value={dbDraft} onChange={e=>setDbDraft(e.target.value)} style={{marginBottom:10}}/>
-              <button className="btn-p" onClick={connectFb}>Connect Firebase</button>
-              <p className="cap" style={{marginTop:8}}>Free setup: console.firebase.google.com → Create project → Realtime Database → copy URL. Then Project Settings → Web app → copy apiKey.</p>
-            </div>
+            <SettingsRow label="Real-Time Sync" value={synced?"Connected":"Local only"} onClick={()=>{setApiDraft(fbApiKey||"");setDbDraft(fbDbUrl||"");setSheet("firebase");}}/>
 
             {/* Feature testing */}
-            <div style={{borderBottom:"1px solid var(--border)",paddingBottom:16,marginBottom:16}}>
+            <div style={{borderTop:"1px solid var(--border)",paddingTop:14,marginTop:10,marginBottom:16}}>
               <div className="lbl" style={{marginBottom:10}}>🧪 Feature Testing</div>
-              <p className="cap" style={{marginBottom:12}}>Preview animations and features before they go live. Only you can see this section.</p>
               <div style={{display:"flex",flexDirection:"column",gap:8}}>
                 <button className="btn-sm" style={{textAlign:"left",padding:"10px 14px"}}
                   onClick={()=>setTestBday("areebah")}>🌸 Test Areebah's Birthday Animation</button>
@@ -1984,26 +1922,8 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
               </div>
             </div>
 
-            {/* Storage info */}
-            <div style={{borderBottom:"1px solid var(--border)",paddingBottom:16,marginBottom:16}}>
-              <div className="lbl" style={{marginBottom:8}}>Storage Info</div>
-              <p className="cap" style={{lineHeight:1.8}}>
-                Photos are compressed to ~100KB each. Firebase free tier holds ~7,000–16,000 photos (1GB limit).<br/><br/>
-                Videos are stored locally on-device only (LOCAL badge). For shared videos: use Firebase Storage (5GB free on Blaze plan) or share Google Drive links via Fridge notes.<br/><br/>
-                Upgrade to Firebase Blaze for ~£0.025/GB/month if you need more.
-              </p>
-            </div>
-
-            {/* Change admin password */}
-            <div>
-              <div className="lbl" style={{marginBottom:8}}>Change Admin Password</div>
-              <input className="field" type="password" placeholder="New admin password"
-                value={newAdvPw} onChange={e=>setNewAdvPw(e.target.value)}
-                onKeyDown={e=>e.key==="Enter"&&saveAdvPw()}
-                style={{marginBottom:10}}/>
-              {advPwMsg&&<p style={{fontSize:13,color:advPwMsg.includes("updated")?"#2e7d32":"#e05050",marginBottom:8}}>{advPwMsg}</p>}
-              <button className="btn-p" onClick={saveAdvPw}>Update Admin Password</button>
-            </div>
+            <SettingsRow label="Admin Password" onClick={()=>{setNewAdvPw("");setAdvPwMsg("");setSheet("adminPw");}}/>
+            <SettingsRow label="Storage Info" onClick={()=>setSheet("storage")}/>
 
             <button style={{marginTop:16,background:"none",border:"none",cursor:"pointer",fontSize:12,color:"var(--muted)",fontWeight:600}} onClick={()=>{setAdvOpen(false);setAdvPw("");}}>
               🔒 Lock Advanced
@@ -2011,6 +1931,121 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
           </div>
         )}
       </div>
+
+      {/* ── Sheets ── */}
+      {sheet==="bg"&&<SettingsSheet title="Background Image" onClose={closeSheet}>
+        <p className="cap" style={{marginBottom:10}}>Paste an image URL, or leave blank for the theme's solid colour.</p>
+        <input className="field" placeholder="https://…" value={bgDraft} onChange={e=>setBgDraft(e.target.value)} style={{marginBottom:12}}/>
+        <button className="btn-p" onClick={()=>{setBgImage(bgDraft||null);closeSheet();}}>Save</button>
+      </SettingsSheet>}
+
+      {sheet==="pageNames"&&<SettingsSheet title="Page Names" onClose={closeSheet}>
+        {Object.entries(nameDraft).map(([k,v])=>(
+          <div key={k} className="srow">
+            <span style={{fontSize:13,color:"var(--slate)",textTransform:"capitalize",width:80}}>{k}</span>
+            <input className="field" style={{flex:1,padding:"5px 8px",fontSize:13}} value={v}
+              onChange={e=>setNameDraft(d=>({...d,[k]:e.target.value}))}/>
+          </div>
+        ))}
+        <button className="btn-p" style={{marginTop:14}} onClick={()=>{setNames(nameDraft);closeSheet();}}>Save Names</button>
+      </SettingsSheet>}
+
+      {sheet==="profile"&&<SettingsSheet title="Your Name & Their Name" onClose={closeSheet}>
+        {[{l:"Your Name",v:sN,s:setSN},{l:"Their Name",v:sT,s:setST}].map(f=>(
+          <div key={f.l} style={{marginBottom:10}}>
+            <div className="lbl" style={{marginBottom:5}}>{f.l}</div>
+            <input className="field" value={f.v} onChange={e=>f.s(e.target.value)}/>
+          </div>
+        ))}
+        <button className="btn-p" style={{marginTop:4}} onClick={()=>{onSettings({myName:sN,theirName:sT,startDate});closeSheet();}}>Save</button>
+      </SettingsSheet>}
+
+      {sheet==="galPin"&&<SettingsSheet title="Gallery PIN" onClose={closeSheet}>
+        <p className="cap" style={{marginBottom:12}}>Exactly 5 digits. Protects the shared Gallery for both of you.</p>
+        <input className="field" type="password" inputMode="numeric" maxLength={5}
+          placeholder="New 5-digit PIN" value={galDraft} autoFocus
+          onChange={e=>setGalDraft(e.target.value.replace(/\D/g,"").slice(0,5))}
+          style={{marginBottom:12,letterSpacing:6,fontSize:20,textAlign:"center"}}/>
+        {pinMsg&&<p style={{fontSize:13,color:pinMsg.includes("updated")?"#2e7d32":"#e05050",marginBottom:10,textAlign:"center"}}>{pinMsg}</p>}
+        <button className="btn-p" onClick={()=>{savePins();if(galDraft.length===5)closeSheet();}}>Save PIN</button>
+      </SettingsSheet>}
+
+      {sheet==="notesPin"&&<SettingsSheet title="Private Notes PIN" onClose={closeSheet}>
+        <p className="cap" style={{marginBottom:12}}>Exactly 5 digits. This one's local to your own device only.</p>
+        <input className="field" type="password" inputMode="numeric" maxLength={5}
+          placeholder="New 5-digit PIN" value={notesDraft} autoFocus
+          onChange={e=>setNotesDraft(e.target.value.replace(/\D/g,"").slice(0,5))}
+          style={{marginBottom:12,letterSpacing:6,fontSize:20,textAlign:"center"}}/>
+        {pinMsg&&<p style={{fontSize:13,color:pinMsg.includes("updated")?"#2e7d32":"#e05050",marginBottom:10,textAlign:"center"}}>{pinMsg}</p>}
+        <button className="btn-p" onClick={()=>{savePins();if(notesDraft.length===5)closeSheet();}}>Save PIN</button>
+      </SettingsSheet>}
+
+      {sheet==="musicFile"&&<SettingsSheet title="Intro Music File" onClose={closeSheet}>
+        <p className="cap" style={{marginBottom:14,lineHeight:1.7}}>MP3, M4A, AAC — max 8MB. One shared file; each account's toggle above controls whether it plays for them.</p>
+        {musicHasFile?(
+          <div style={{background:"var(--rose)",borderRadius:12,padding:"10px 14px",marginBottom:10,display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:18}}>🎵</span>
+            <span style={{fontSize:13,fontWeight:500,color:"var(--ink)",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{musicFileName||"Audio file"}</span>
+            <button onClick={()=>{clearMusicFile();}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--accent)",fontSize:12,fontWeight:600,flexShrink:0}}>Remove</button>
+          </div>
+        ):(
+          <button className="btn-sm" style={{width:"100%",padding:"11px",marginBottom:10,borderRadius:12,textAlign:"center"}}
+            onClick={()=>musicFileRef.current.click()}>
+            📁 Choose Audio File
+          </button>
+        )}
+        <input ref={musicFileRef} type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg" style={{display:"none"}} onChange={handleMusicUpload}/>
+        {musicMsg&&<p style={{fontSize:12,color:"var(--accent)",marginTop:10,fontWeight:500}}>{musicMsg}</p>}
+      </SettingsSheet>}
+
+      {sheet==="spotify"&&<SettingsSheet title="Spotify Link" onClose={closeSheet}>
+        <p className="cap" style={{marginBottom:10}}>Optional — shows an embedded player. Spotify can't autoplay in a browser, so this is just a preview; the uploaded file above is what actually plays automatically.</p>
+        <input className="field" placeholder="https://open.spotify.com/track/…"
+          value={spotifyUrl} onChange={e=>setSpotifyUrl(e.target.value)}
+          style={{marginBottom:10}}/>
+        <button className="btn-p" onClick={saveSpotify}>Save Spotify Link</button>
+        {spotifyUrl&&(()=>{
+          const match=spotifyUrl.match(/track\/([a-zA-Z0-9]+)/);
+          if(!match)return<p className="cap" style={{marginTop:8,color:"#e05050"}}>Invalid Spotify link. Paste a full track URL.</p>;
+          return(
+            <iframe
+              src={`https://open.spotify.com/embed/track/${match[1]}?utm_source=generator&theme=0`}
+              width="100%" height="80" frameBorder="0"
+              allow="autoplay; clipboard-write; encrypted-media; picture-in-picture"
+              style={{borderRadius:12,marginTop:12,border:"none"}}
+            />
+          );
+        })()}
+      </SettingsSheet>}
+
+      {sheet==="firebase"&&<SettingsSheet title="Real-Time Sync" onClose={closeSheet}>
+        <p className="cap" style={{marginBottom:10}}><span className={`sync-dot ${synced?"on":"off"}`}/>{synced?"Connected — both phones sync live":"Not connected — local only"}</p>
+        <div className="lbl" style={{marginBottom:4}}>Firebase Web API Key</div>
+        <input className="field" placeholder="AIzaSy…" value={apiDraft}
+          onChange={e=>setApiDraft(e.target.value)} style={{marginBottom:8}}/>
+        <div className="lbl" style={{marginBottom:4}}>Realtime Database URL</div>
+        <input className="field" placeholder="https://…firebasedatabase.app"
+          value={dbDraft} onChange={e=>setDbDraft(e.target.value)} style={{marginBottom:10}}/>
+        <button className="btn-p" onClick={()=>{connectFb();closeSheet();}}>Connect Firebase</button>
+        <p className="cap" style={{marginTop:8}}>Free setup: console.firebase.google.com → Create project → Realtime Database → copy URL. Then Project Settings → Web app → copy apiKey.</p>
+      </SettingsSheet>}
+
+      {sheet==="adminPw"&&<SettingsSheet title="Change Admin Password" onClose={closeSheet}>
+        <input className="field" type="password" placeholder="New admin password" autoFocus
+          value={newAdvPw} onChange={e=>setNewAdvPw(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&saveAdvPw()}
+          style={{marginBottom:10}}/>
+        {advPwMsg&&<p style={{fontSize:13,color:advPwMsg.includes("updated")?"#2e7d32":"#e05050",marginBottom:8}}>{advPwMsg}</p>}
+        <button className="btn-p" onClick={saveAdvPw}>Update Password</button>
+      </SettingsSheet>}
+
+      {sheet==="storage"&&<SettingsSheet title="Storage Info" onClose={closeSheet}>
+        <p className="cap" style={{lineHeight:1.8}}>
+          Photos are compressed to ~100KB each. Firebase free tier holds ~7,000–16,000 photos (1GB limit).<br/><br/>
+          Videos are stored locally on-device only (LOCAL badge). For shared videos: use Firebase Storage (5GB free on Blaze plan) or share Google Drive links via Fridge notes.<br/><br/>
+          Upgrade to Firebase Blaze for ~£0.025/GB/month if you need more.
+        </p>
+      </SettingsSheet>}
 
       {/* Birthday test overlay */}
       {testBday&&(()=>{
@@ -2444,7 +2479,7 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
       {page==="home"&&<HomePage myName={myName} theirName={theirName} startDate={startDate} nav={setPage} moodEmojis={moodEmojis} setMoodEmojis={setMoodEmojis} connEmoji={connEmoji} setConnEmoji={setConnEmoji} myRole={myRole} theirRole={theirRole}/>}
       {page==="them"&&<PartnerProfilePage theirName={theirName} startDate={startDate} theirRole={theirRole}/>}
       {page==="me"&&<MePage myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} pageName={names.me||DEF_NAMES.me} setPageName={makeNameSetter("me")} myRole={myRole}/>}
-      {page==="fridge"&&<FridgePage pageName={names.fridge||DEF_NAMES.fridge} setPageName={makeNameSetter("fridge")}/>}
+      {page==="fridge"&&<FridgePage pageName={names.fridge||DEF_NAMES.fridge} setPageName={makeNameSetter("fridge")} myRole={myRole}/>}
       {page==="dates"&&<DatesPage pageName={names.dates||DEF_NAMES.dates} setPageName={makeNameSetter("dates")}/>}
       {page==="map"&&<MapPage pageName={names.map||DEF_NAMES.map} setPageName={makeNameSetter("map")} myRole={myRole} theirRole={theirRole} myName={myName} theirName={theirName}/>}
       {page==="gallery"&&<GalleryPage pageName={names.gallery||DEF_NAMES.gallery} setPageName={makeNameSetter("gallery")} myName={myName}/>}

@@ -2154,10 +2154,22 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
   // Keep the Firebase ID token fresh — every DB read/write needs it (RTDB rules require auth)
   useEffect(()=>{
     if(!user){setTokenReady(false);return;}
+    let cancelled=false;
     if(FIREBASE_ID_TOKEN){setTokenReady(true);}
-    else refreshFirebaseToken().then(()=>setTokenReady(true));
+    else refreshFirebaseToken().then(tok=>{
+      if(cancelled)return;
+      if(!tok){
+        // Session predates this build (no refreshToken saved) or the refresh
+        // token was revoked — bounce back to sign-in so a fresh login can
+        // populate a real session instead of silently running unauthenticated.
+        ss("auth_user",null);
+        setUser(null);
+        return;
+      }
+      setTokenReady(true);
+    });
     const iv=setInterval(refreshFirebaseToken,50*60*1000);
-    return()=>clearInterval(iv);
+    return()=>{cancelled=true;clearInterval(iv);};
   },[user]);
 
   // Pull shared intro-music settings from the cloud as soon as the token is ready,

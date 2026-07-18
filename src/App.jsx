@@ -6,6 +6,11 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 ════════════════════════════════════════════ */
 const NFC_TOKEN     = "8f4a2b7c1d3e9f5a6b8c0d4e1f2a3b5c"; // ← write this onto your NFC tag
 const ALLOWED_EMAILS= ["hyphen080@gmail.com","malikareebah157@gmail.com"];
+// Each account is permanently tied to one identity — "me" vs "them" is derived
+// from which email is signed in, never a per-device default both users share.
+const ROLE_BY_EMAIL = {"hyphen080@gmail.com":"uthmaan","malikareebah157@gmail.com":"areebah"};
+const ROLE_NAMES    = {uthmaan:"Uthmaan",areebah:"Areebah"};
+const otherRole = r => r==="uthmaan"?"areebah":"uthmaan";
 const MAX_USERS     = 5;
 const DEF_START     = "2026-04-14";
 
@@ -61,8 +66,33 @@ function prettifyAuthErr(msg){
   return map[msg]||msg;
 }
 
+/* ── Firebase session (ID token, kept fresh for DB auth) ──── */
+let FIREBASE_ID_TOKEN = null;
+
+function persistAuthSession(d){
+  FIREBASE_ID_TOKEN = d.idToken;
+  ss("auth_user", { email: d.email, idToken: d.idToken, refreshToken: d.refreshToken, ts: Date.now() });
+}
+
+async function refreshFirebaseToken(){
+  const auth = gs("auth_user", null);
+  if(!auth || !auth.refreshToken) return null;
+  try{
+    const r = await fetch(`https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(auth.refreshToken)}`,
+    });
+    const d = await r.json();
+    if(d.error) return null;
+    FIREBASE_ID_TOKEN = d.id_token;
+    ss("auth_user", { email: auth.email, idToken: d.id_token, refreshToken: d.refresh_token, ts: Date.now() });
+    return d.id_token;
+  }catch{ return null; }
+}
+
 /* ── Firebase Realtime DB REST ──────────────────────────── */
-const dbPath = p => `${FIREBASE_DB_URL}/${p}.json`;
+const dbPath = p => `${FIREBASE_DB_URL}/${p}.json${FIREBASE_ID_TOKEN?`?auth=${encodeURIComponent(FIREBASE_ID_TOKEN)}`:""}`;
 async function dbWrite(path,data){ if(!FIREBASE_DB_URL)return; await fetch(dbPath(path),{method:"PUT",body:JSON.stringify(data),headers:{"Content-Type":"application/json"}}); }
 async function dbGet(path){ if(!FIREBASE_DB_URL)return null; try{const r=await fetch(dbPath(path));const d=await r.json();return d;}catch{return null;} }
 function dbListen(path,cb){
@@ -159,7 +189,7 @@ isHalal: true=confirmed halal, false=confirmed NOT halal (alcohol/pork on premis
     body:JSON.stringify({
       model:"claude-sonnet-4-6",
       max_tokens:3000,
-      tools:[{"type":"web_search_20250305","name":"web_search"}],
+      tools:[{"type":"web_search_20260209","name":"web_search"}],
       messages:[{role:"user",content:prompt}]
     })
   });
@@ -591,7 +621,6 @@ function NFCGate({onPass}){
               }catch(e){}
               if(text.includes(NFC_TOKEN)){
                 ctrl.abort();
-                nfcSave();
                 onPass();
                 return;
               }
@@ -652,7 +681,7 @@ function NFCGate({onPass}){
     <>
       Scan your NFC tag with your camera or NFC app.
       <br/><br/>
-      It will open a link — tap <strong>Open</strong> and you will be let in automatically. The session then stays unlocked for <strong>12 hours</strong>.
+      It will open a link — tap <strong>Open</strong> and you will be let in automatically. You'll need to scan again every time you reload or reopen the app.
     </>,
     toggleEl
   );
@@ -859,7 +888,7 @@ function AuthScreen({onAuth,initFbKey,initFbUrl,onFbSave}){
         const newCount=(regCount||0)+1;
         await dbWrite("meta/registered_count",newCount);
       }
-      ss("auth_user",{email:d.email,token:d.idToken,ts:Date.now()});
+      persistAuthSession(d);
       onAuth(d.email);
     }catch(e){setErr(e.message);}
     setBusy(false);
@@ -920,12 +949,12 @@ function CounterCard({startDate}){
 /* ═══════════════════════════════════════════
    MOOD CARD
 ═══════════════════════════════════════════ */
-function MoodCard({moodEmojis,onEditEmojis}){
-  const[myMood,setMyMood]=useSync("mood_me",null);
+function MoodCard({moodEmojis,onEditEmojis,myRole,theirRole}){
+  const[myMood,setMyMood]=useSync("mood_"+myRole,null);
   const[note,setNote]=useState("");
   const[lastNote,setLastNote]=useSync("last_note",null);
   const[them,setThem]=useState(false);
-  const[theirMood]=useSync("mood_them",null);
+  const[theirMood]=useSync("mood_"+theirRole,null);
   const send=()=>{if(!note.trim())return;setLastNote({text:note.trim(),ts:Date.now()});setNote("");};
   return(
     <div className="card">
@@ -952,9 +981,9 @@ function MoodCard({moodEmojis,onEditEmojis}){
 /* ═══════════════════════════════════════════
    DISTANCE CARD
 ═══════════════════════════════════════════ */
-function DistanceCard(){
-  const[myLoc,setMyLoc]=useSync("loc_me",null);
-  const[theirLoc]=useSync("loc_them",null);
+function DistanceCard({myRole,theirRole}){
+  const[myLoc,setMyLoc]=useSync("loc_"+myRole,null);
+  const[theirLoc]=useSync("loc_"+theirRole,null);
   const[loading,setLoading]=useState(false);const[open,setOpen]=useState(false);
   const dist=myLoc&&theirLoc?hav(myLoc.lat,myLoc.lon,theirLoc.lat,theirLoc.lon):null;
   const sub=!myLoc?"Share your location":!theirLoc?"Waiting on them…":`${fmtDist(dist)} apart`;
@@ -989,8 +1018,9 @@ function DistanceCard(){
 /* ═══════════════════════════════════════════
    PROFILE CIRCLES
 ═══════════════════════════════════════════ */
-function ProfileCircles({myName,theirName,connEmoji,onEditEmoji,onMeClick}){
-  const myPhoto=gs("photo_me",null),theirPhoto=gs("photo_them",null);
+function ProfileCircles({myName,theirName,connEmoji,onEditEmoji,onMeClick,myRole,theirRole}){
+  const[myPhoto]=useSync("photo_"+myRole,null);
+  const[theirPhoto]=useSync("photo_"+theirRole,null);
   return(
     <div className="profs-row">
       <div className="prof-item" style={{cursor:"pointer"}} onClick={onMeClick}>
@@ -1011,16 +1041,16 @@ function ProfileCircles({myName,theirName,connEmoji,onEditEmoji,onMeClick}){
 /* ═══════════════════════════════════════════
    HOME PAGE
 ═══════════════════════════════════════════ */
-function HomePage({myName,theirName,startDate,nav,moodEmojis,setMoodEmojis,connEmoji,setConnEmoji}){
+function HomePage({myName,theirName,startDate,nav,moodEmojis,setMoodEmojis,connEmoji,setConnEmoji,myRole,theirRole}){
   const[editEmojis,setEditEmojis]=useState(false);const[emojiDraft,setEmojiDraft]=useState((moodEmojis||DEF_MOODS).join(" "));
   const[editConn,setEditConn]=useState(false);const[connDraft,setConnDraft]=useState(connEmoji||"💕");
   return(
     <div className="us-page pf">
       <CounterCard startDate={startDate}/>
       <BirthdayCard/>
-      <MoodCard moodEmojis={moodEmojis} onEditEmojis={()=>{setEmojiDraft((moodEmojis||DEF_MOODS).join(" "));setEditEmojis(true);}}/>
-      <DistanceCard/>
-      <ProfileCircles myName={myName} theirName={theirName} connEmoji={connEmoji} onMeClick={()=>nav("me")} onEditEmoji={()=>{setConnDraft(connEmoji||"💕");setEditConn(true);}}/>
+      <MoodCard moodEmojis={moodEmojis} onEditEmojis={()=>{setEmojiDraft((moodEmojis||DEF_MOODS).join(" "));setEditEmojis(true);}} myRole={myRole} theirRole={theirRole}/>
+      <DistanceCard myRole={myRole} theirRole={theirRole}/>
+      <ProfileCircles myName={myName} theirName={theirName} connEmoji={connEmoji} onMeClick={()=>nav("me")} onEditEmoji={()=>{setConnDraft(connEmoji||"💕");setEditConn(true);}} myRole={myRole} theirRole={theirRole}/>
       {editEmojis&&<div className="overlay" onClick={()=>setEditEmojis(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="sh-handle"/><h3 className="sh-title">Edit Mood Emojis</h3><p className="cap" style={{marginBottom:10}}>Up to 10 emojis, space-separated</p><input className="field" value={emojiDraft} onChange={e=>setEmojiDraft(e.target.value)} style={{fontSize:22,letterSpacing:4,marginBottom:12}}/><button className="btn-p" onClick={()=>{const a=emojiDraft.split(/\s+/).filter(Boolean).slice(0,10);setMoodEmojis(a);setEditEmojis(false);}}>Save</button></div></div>}
       {editConn&&<div className="overlay" onClick={()=>setEditConn(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="sh-handle"/><h3 className="sh-title">Connection Emoji</h3><input className="field" value={connDraft} onChange={e=>setConnDraft(e.target.value)} maxLength={2} style={{fontSize:32,textAlign:"center",letterSpacing:4,marginBottom:12}}/><button className="btn-p" onClick={()=>{setConnEmoji(connDraft);setEditConn(false);}}>Save</button></div></div>}
     </div>
@@ -1030,14 +1060,14 @@ function HomePage({myName,theirName,startDate,nav,moodEmojis,setMoodEmojis,connE
 /* ═══════════════════════════════════════════
    ME PAGE
 ═══════════════════════════════════════════ */
-function MePage({myName,theirName,startDate,onSettings,pageName,setPageName}){
-  const[photo,setPhoto]=useState(()=>gs("photo_me",null));
-  const[bio,setBio]=useState(()=>gs("bio_me",""));
+function MePage({myName,theirName,startDate,onSettings,pageName,setPageName,myRole}){
+  const[photo,setPhoto]=useSync("photo_"+myRole,null);
+  const[bio,setBio]=useSync("bio_"+myRole,"");
   const[editBio,setEditBio]=useState(false);const[draft,setDraft]=useState(bio);
   const[showSet,setShowSet]=useState(false);const[sN,setSN]=useState(myName);const[sT,setST]=useState(theirName);const[sS,setSS]=useState(startDate);
   const fileRef=useRef();
-  const handlePhoto=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{setPhoto(ev.target.result);ss("photo_me",ev.target.result);};r.readAsDataURL(f);};
-  const saveBio=()=>{setBio(draft);ss("bio_me",draft);setEditBio(false);};
+  const handlePhoto=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{setPhoto(ev.target.result);};r.readAsDataURL(f);};
+  const saveBio=()=>{setBio(draft);setEditBio(false);};
   const days=Math.floor((Date.now()-new Date(startDate))/86400000);const e=calcE(startDate);
   return(
     <div className="us-page pf">
@@ -1266,10 +1296,10 @@ function DatesPage({pageName,setPageName}){
 /* ═══════════════════════════════════════════
    MAP PAGE
 ═══════════════════════════════════════════ */
-function MapPage({pageName,setPageName}){
+function MapPage({pageName,setPageName,myRole,theirRole}){
   const[memories,setMemories]=useSync("map_memories",[]);
-  const[myLoc,setMyLoc]=useSync("loc_me",null);
-  const[theirLoc]=useSync("loc_them",null);
+  const[myLoc,setMyLoc]=useSync("loc_"+myRole,null);
+  const[theirLoc]=useSync("loc_"+theirRole,null);
   const[selId,setSelId]=useState(null);const[adding,setAdding]=useState(false);
   const[pending,setPending]=useState(null);const[noteText,setNoteText]=useState("");
   const[gettingLoc,setGettingLoc]=useState(false);
@@ -1500,7 +1530,7 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
   const [musicMsg, setMusicMsg] = useState("");
   const musicFileRef = useRef();
 
-  const toggleMusic = v => { setMusicEnabled(v); ss("music_enabled", v); };
+  const toggleMusic = v => { setMusicEnabled(v); ss("music_enabled", v); dbWrite("room/music_enabled", v); };
 
   const handleMusicUpload = e => {
     const f = e.target.files[0]; if (!f) return;
@@ -1598,9 +1628,9 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
       if (typeof unsubB64 === 'function') unsubB64();
       if (typeof unsubName === 'function') unsubName();
     };
-  }, [synced, user]);
+  }, [synced]);
 
-  const saveSpotify=()=>{ss("music_spotify_url",spotifyUrl);setMusicMsg("Spotify URL saved.");};
+  const saveSpotify=()=>{ss("music_spotify_url",spotifyUrl);dbWrite("room/music_spotify_url",spotifyUrl);setMusicMsg("Spotify URL saved.");};
   const[nameDraft,setNameDraft]=useState({...names});
   const[sN,setSN]=useState(myName);
   const[sT,setST]=useState(theirName);
@@ -2094,10 +2124,19 @@ export default function App(){
   const[musicPlaying,setMusicPlaying]=useState(false);
   // Auth gate
   const[user,setUser]=useState(()=>{ const u=gs("auth_user",null); return u&&(Date.now()-u.ts<7*86400000)?u:null; });
+  const[tokenReady,setTokenReady]=useState(false);
+  // Which account is signed in decides who "me" and "them" are — never a per-device default
+  const myRole=user?(ROLE_BY_EMAIL[(user.email||"").toLowerCase()]||"uthmaan"):null;
+  const theirRole=myRole?otherRole(myRole):null;
   // App state
   const[page,setPage]=useState("home");
-  const[myName,setMyName]=useState(()=>gs("name_me","Uthmaan"));
-  const[theirName,setTheirName]=useState(()=>gs("name_them","Areebah"));
+  const[myName,setMyName]=useState(()=>ROLE_NAMES.uthmaan);
+  const[theirName,setTheirName]=useState(()=>ROLE_NAMES.areebah);
+  useEffect(()=>{
+    if(!myRole)return;
+    setMyName(gs(`name_${myRole}`,ROLE_NAMES[myRole]));
+    setTheirName(gs(`name_${theirRole}`,ROLE_NAMES[theirRole]));
+  },[myRole]);
   const[startDate,setStartDate]=useState(()=>gs("start_date",DEF_START));
   const[names,setNamesState]=useSync("page_names",DEF_NAMES);
   const[moodEmojis,setMoodEmojisState]=useSync("mood_emojis",DEF_MOODS);
@@ -2111,6 +2150,28 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
 
   // Init Firebase from saved config
   useEffect(()=>{ if(fbApiKey&&fbDbUrl){FIREBASE_API_KEY=fbApiKey;FIREBASE_DB_URL=fbDbUrl;setSynced(true);} },[fbApiKey,fbDbUrl]);
+
+  // Keep the Firebase ID token fresh — every DB read/write needs it (RTDB rules require auth)
+  useEffect(()=>{
+    if(!user){setTokenReady(false);return;}
+    if(FIREBASE_ID_TOKEN){setTokenReady(true);}
+    else refreshFirebaseToken().then(()=>setTokenReady(true));
+    const iv=setInterval(refreshFirebaseToken,50*60*1000);
+    return()=>clearInterval(iv);
+  },[user]);
+
+  // Pull shared intro-music settings from the cloud as soon as the token is ready,
+  // so music uploaded on one phone is cached locally before the other phone unlocks
+  useEffect(()=>{
+    if(!tokenReady)return;
+    const unsubs=[
+      dbListen("room/music_enabled",v=>ss("music_enabled",v)),
+      dbListen("room/music_file_b64",v=>ss("music_file_b64",v)),
+      dbListen("room/music_file_name",v=>ss("music_file_name",v)),
+      dbListen("room/music_spotify_url",v=>ss("music_spotify_url",v)),
+    ];
+    return()=>unsubs.forEach(u=>u&&u());
+  },[tokenReady]);
   const setTheme=v=>{setThemeState(v);};
   const setBgImage=v=>{setBgImageState(v);};
   const setMoodEmojis=v=>setMoodEmojisState(v);
@@ -2124,7 +2185,7 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
     s.textContent=buildCSS(theme,bgImage);
   },[theme,bgImage]);
 
-  const onSettings=({myName:n,theirName:t,startDate:s})=>{setMyName(n);setTheirName(t);setStartDate(s);ss("name_me",n);ss("name_them",t);ss("start_date",s);};
+  const onSettings=({myName:n,theirName:t,startDate:s})=>{setMyName(n);setTheirName(t);setStartDate(s);ss(`name_${myRole}`,n);ss(`name_${theirRole}`,t);ss("start_date",s);};
   const onAuth=email=>{setUser({email});};
   const makeNameSetter=key=>v=>setNames({...names,[key]:v});
 
@@ -2182,6 +2243,7 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
     }}
   /></div></ErrorBoundary>
   );
+  if(!tokenReady)return(<ErrorBoundary><div className="us-app"><style>{buildCSS(theme,bgImage)}</style><div className="nfc-wrap"><div style={{fontSize:"clamp(44px,12vw,56px)",marginBottom:16}}>💕</div><div className="spinner" style={{margin:"16px auto"}}/></div></div></ErrorBoundary>);
   return(
     <ErrorBoundary>
     <div className="us-app">
@@ -2193,11 +2255,11 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
           ?<><div className="logo">us.</div><div style={{display:"flex",alignItems:"center",gap:8}}>{synced&&<span style={{fontSize:9,fontWeight:700,color:"var(--muted)",display:"flex",alignItems:"center"}}><span className="sync-dot on"/>LIVE</span>}<button style={{background:"none",border:"none",cursor:"pointer",fontSize:10,fontWeight:700,letterSpacing:".12em",textTransform:"uppercase",color:"var(--slate)"}} onClick={()=>setPage("gallery")}>GALLERY</button></div></>
           :<><button style={{background:"none",border:"none",cursor:"pointer",color:"var(--slate)",display:"flex",padding:2}} onClick={()=>setPage("home")}><IcBack/></button><span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(15px,4.5vw,18px)",fontWeight:600,color:"var(--ink)"}}>{names[page]||DEF_NAMES[page]||""}</span><div style={{width:24}}/></>}
       </header>
-      {page==="home"&&<HomePage myName={myName} theirName={theirName} startDate={startDate} nav={setPage} moodEmojis={moodEmojis} setMoodEmojis={setMoodEmojis} connEmoji={connEmoji} setConnEmoji={setConnEmoji}/>}
-      {page==="me"&&<MePage myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} pageName={names.me||DEF_NAMES.me} setPageName={makeNameSetter("me")}/>}
+      {page==="home"&&<HomePage myName={myName} theirName={theirName} startDate={startDate} nav={setPage} moodEmojis={moodEmojis} setMoodEmojis={setMoodEmojis} connEmoji={connEmoji} setConnEmoji={setConnEmoji} myRole={myRole} theirRole={theirRole}/>}
+      {page==="me"&&<MePage myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} pageName={names.me||DEF_NAMES.me} setPageName={makeNameSetter("me")} myRole={myRole}/>}
       {page==="fridge"&&<FridgePage pageName={names.fridge||DEF_NAMES.fridge} setPageName={makeNameSetter("fridge")}/>}
       {page==="dates"&&<DatesPage pageName={names.dates||DEF_NAMES.dates} setPageName={makeNameSetter("dates")}/>}
-      {page==="map"&&<MapPage pageName={names.map||DEF_NAMES.map} setPageName={makeNameSetter("map")}/>}
+      {page==="map"&&<MapPage pageName={names.map||DEF_NAMES.map} setPageName={makeNameSetter("map")} myRole={myRole} theirRole={theirRole}/>}
       {page==="gallery"&&<GalleryPage pageName={names.gallery||DEF_NAMES.gallery} setPageName={makeNameSetter("gallery")} myName={myName}/>}
       {page==="notes"&&<NotesPage pageName={names.notes||DEF_NAMES.notes} setPageName={makeNameSetter("notes")}/>}
       {page==="settings"&&<SettingsPage pageName={names.settings||DEF_NAMES.settings} setPageName={makeNameSetter("settings")} theme={theme} setTheme={setTheme} bgImage={bgImage} setBgImage={setBgImage} names={names} setNames={setNames} myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} fbApiKey={fbApiKey} setFbApiKey={setFbApiKey} fbDbUrl={fbDbUrl} setFbDbUrl={setFbDbUrl} synced={synced} onReplayIntro={()=>setShowIntro(true)} onTestMusic={startIntroMusic} musicPlaying={musicPlaying} stopMusic={stopMusic}/>}

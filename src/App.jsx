@@ -1069,7 +1069,7 @@ function MePage({myName,theirName,startDate,onSettings,pageName,setPageName,myRo
   const[photo,setPhoto]=useSync("photo_"+myRole,null);
   const[bio,setBio]=useSync("bio_"+myRole,"");
   const[editBio,setEditBio]=useState(false);const[draft,setDraft]=useState(bio);
-  const[showSet,setShowSet]=useState(false);const[sN,setSN]=useState(myName);const[sT,setST]=useState(theirName);const[sS,setSS]=useState(startDate);
+  const[showSet,setShowSet]=useState(false);const[sN,setSN]=useState(myName);const[sT,setST]=useState(theirName);
   const fileRef=useRef();
   const handlePhoto=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{setPhoto(ev.target.result);};r.readAsDataURL(f);};
   const saveBio=()=>{setBio(draft);setEditBio(false);};
@@ -1094,8 +1094,7 @@ function MePage({myName,theirName,startDate,onSettings,pageName,setPageName,myRo
         <div className="card-hdr"><h3 className="card-title">Profile Settings</h3><button className="btn-g" onClick={()=>setShowSet(!showSet)}>{showSet?"Cancel":"Edit"}</button></div>
         {showSet?<div>
           {[{l:"Your Name",v:sN,s:setSN},{l:"Their Name",v:sT,s:setST}].map(f=><div key={f.l} style={{marginBottom:10}}><div className="lbl" style={{marginBottom:5}}>{f.l}</div><input className="field" value={f.v} onChange={e=>f.s(e.target.value)}/></div>)}
-          <div style={{marginBottom:12}}><div className="lbl" style={{marginBottom:5}}>Relationship Start</div><input className="field" type="date" value={sS} onChange={e=>setSS(e.target.value)}/></div>
-          <button className="btn-p" onClick={()=>{onSettings({myName:sN,theirName:sT,startDate:sS});setShowSet(false);}}>Save</button>
+          <button className="btn-p" onClick={()=>{onSettings({myName:sN,theirName:sT,startDate});setShowSet(false);}}>Save</button>
         </div>:<div>{[{l:"Your name",v:myName},{l:"Their name",v:theirName},{l:"Since",v:new Date(startDate).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}].map(r=><div key={r.l} className="srow"><span style={{fontSize:14,fontWeight:500,color:"var(--ink)"}}>{r.l}</span><span className="cap">{r.v}</span></div>)}</div>}
       </div>
     </div>
@@ -1150,7 +1149,7 @@ function DatesPage({pageName,setPageName}){
       const res=await researchPlaces(plannerIdea.n,location);
       if(res.length===0)setSearchErr("No results found. Try a different location or be more specific.");
       setResults(res);
-    }catch(e){setSearchErr("Search failed. Check your connection and try again.");}
+    }catch(e){setSearchErr(e.message||"Search failed. Check your connection and try again.");}
     setSearching(false);
   };
 
@@ -1718,7 +1717,6 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
   const[nameDraft,setNameDraft]=useState({...names});
   const[sN,setSN]=useState(myName);
   const[sT,setST]=useState(theirName);
-  const[sS,setSS]=useState(startDate);
 
   // Change PINs
   const[galDraft,setGalDraft]=useState("");
@@ -1807,11 +1805,11 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
             <input className="field" value={f.v} onChange={e=>f.s(e.target.value)}/>
           </div>
         ))}
-        <div style={{marginBottom:12}}>
-          <div className="lbl" style={{marginBottom:5}}>Relationship Start Date</div>
-          <input className="field" type="date" value={sS} onChange={e=>setSS(e.target.value)}/>
+        <div className="srow">
+          <span style={{fontSize:14,fontWeight:500,color:"var(--ink)"}}>Together since</span>
+          <span className="cap">{new Date(startDate).toLocaleDateString("en-GB",{day:"numeric",month:"long",year:"numeric"})}</span>
         </div>
-        <button className="btn-p" onClick={()=>onSettings({myName:sN,theirName:sT,startDate:sS})}>Save Profile</button>
+        <button className="btn-p" style={{marginTop:12}} onClick={()=>onSettings({myName:sN,theirName:sT,startDate})}>Save Profile</button>
       </div>
 
       {/* ── Change PINs ── */}
@@ -2329,8 +2327,22 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
         .catch(()=>{}); // autoplay blocked — silently fail
     }catch(e){}
   };
-  const startIntroMusic=()=>{
-    if(!myRole||!gs(`music_enabled_${myRole}`,false))return;
+  const startIntroMusic=async()=>{
+    if(!myRole)return;
+    let on=gs(`music_enabled_${myRole}`,null);
+    if(on===null){
+      // No local answer cached yet (fresh device, or history/site-data was
+      // just cleared) — ask Firebase directly so the very first unlock
+      // always reflects the true toggle, even if the pre-warm step above
+      // somehow missed it. This is the account's own manually-set switch,
+      // never reset by anything except that switch being flipped again.
+      try{
+        const v=await dbGet(`room/music_enabled_${myRole}`);
+        on=!!v;
+        ss(`music_enabled_${myRole}`,on);
+      }catch{ on=false; }
+    }
+    if(!on)return;
     playMusicFile();
   };
 

@@ -36,6 +36,18 @@ export async function handler(event) {
 
     const data = await response.json();
 
+    if (!response.ok) {
+      const msg = data?.error?.message || `Anthropic API error (HTTP ${response.status})`;
+      const hint = response.status === 401
+        ? ' — ANTHROPIC_API_KEY in Netlify is missing or invalid. Go to Netlify → Site configuration → Environment variables and set a real key from console.anthropic.com.'
+        : '';
+      return {
+        statusCode: response.status,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+        body: JSON.stringify({ error: msg + hint }),
+      };
+    }
+
     return {
       statusCode: 200,
       headers: {

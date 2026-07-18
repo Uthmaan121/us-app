@@ -1023,7 +1023,7 @@ function DistanceCard({myRole,theirRole}){
 /* ═══════════════════════════════════════════
    PROFILE CIRCLES
 ═══════════════════════════════════════════ */
-function ProfileCircles({myName,theirName,connEmoji,onEditEmoji,onMeClick,myRole,theirRole}){
+function ProfileCircles({myName,theirName,connEmoji,onEditEmoji,onMeClick,onThemClick,myRole,theirRole}){
   const[myPhoto]=useSync("photo_"+myRole,null);
   const[theirPhoto]=useSync("photo_"+theirRole,null);
   return(
@@ -1034,7 +1034,7 @@ function ProfileCircles({myName,theirName,connEmoji,onEditEmoji,onMeClick,myRole
         <span style={{fontSize:12,fontWeight:500,color:"var(--slate)"}}>{myName}</span>
       </div>
       <button style={{marginTop:-12,fontSize:"clamp(18px,5vw,22px)",background:"none",border:"none",cursor:"pointer"}} onClick={onEditEmoji}>{connEmoji||"💕"}</button>
-      <div className="prof-item">
+      <div className="prof-item" style={{cursor:"pointer"}} onClick={onThemClick}>
         <div className="prof-circle prof-them">{theirPhoto?<img src={theirPhoto} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="them"/>:<span style={{fontSize:"clamp(26px,8vw,32px)",color:"var(--muted)"}}>?</span>}</div>
         <span style={{fontSize:9,fontWeight:700,letterSpacing:".1em",textTransform:"uppercase",color:"var(--muted)"}}>them</span>
         <span style={{fontSize:12,fontWeight:500,color:"var(--slate)"}}>{theirName}</span>
@@ -1055,7 +1055,7 @@ function HomePage({myName,theirName,startDate,nav,moodEmojis,setMoodEmojis,connE
       <BirthdayCard/>
       <MoodCard moodEmojis={moodEmojis} onEditEmojis={()=>{setEmojiDraft((moodEmojis||DEF_MOODS).join(" "));setEditEmojis(true);}} myRole={myRole} theirRole={theirRole}/>
       <DistanceCard myRole={myRole} theirRole={theirRole}/>
-      <ProfileCircles myName={myName} theirName={theirName} connEmoji={connEmoji} onMeClick={()=>nav("me")} onEditEmoji={()=>{setConnDraft(connEmoji||"💕");setEditConn(true);}} myRole={myRole} theirRole={theirRole}/>
+      <ProfileCircles myName={myName} theirName={theirName} connEmoji={connEmoji} onMeClick={()=>nav("me")} onThemClick={()=>nav("them")} onEditEmoji={()=>{setConnDraft(connEmoji||"💕");setEditConn(true);}} myRole={myRole} theirRole={theirRole}/>
       {editEmojis&&<div className="overlay" onClick={()=>setEditEmojis(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="sh-handle"/><h3 className="sh-title">Edit Mood Emojis</h3><p className="cap" style={{marginBottom:10}}>Up to 10 emojis, space-separated</p><input className="field" value={emojiDraft} onChange={e=>setEmojiDraft(e.target.value)} style={{fontSize:22,letterSpacing:4,marginBottom:12}}/><button className="btn-p" onClick={()=>{const a=emojiDraft.split(/\s+/).filter(Boolean).slice(0,10);setMoodEmojis(a);setEditEmojis(false);}}>Save</button></div></div>}
       {editConn&&<div className="overlay" onClick={()=>setEditConn(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="sh-handle"/><h3 className="sh-title">Connection Emoji</h3><input className="field" value={connDraft} onChange={e=>setConnDraft(e.target.value)} maxLength={2} style={{fontSize:32,textAlign:"center",letterSpacing:4,marginBottom:12}}/><button className="btn-p" onClick={()=>{setConnEmoji(connDraft);setEditConn(false);}}>Save</button></div></div>}
     </div>
@@ -1071,7 +1071,15 @@ function MePage({myName,theirName,startDate,onSettings,pageName,setPageName,myRo
   const[editBio,setEditBio]=useState(false);const[draft,setDraft]=useState(bio);
   const[showSet,setShowSet]=useState(false);const[sN,setSN]=useState(myName);const[sT,setST]=useState(theirName);
   const fileRef=useRef();
-  const handlePhoto=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{setPhoto(ev.target.result);};r.readAsDataURL(f);};
+  const handlePhoto=async e=>{
+    const f=e.target.files[0];if(!f)return;
+    // Compress before syncing — an uncompressed phone photo (several MB as
+    // base64) silently fails to write to Firebase with no error surfaced,
+    // so it looked like it saved (local state updates instantly) but never
+    // actually reached the cloud, which is why it vanished on history clear.
+    const b64=await compressImg(f,1080,0.7);
+    if(b64)setPhoto(b64);
+  };
   const saveBio=()=>{setBio(draft);setEditBio(false);};
   const days=Math.floor((Date.now()-new Date(startDate))/86400000);const e=calcE(startDate);
   return(
@@ -1096,6 +1104,31 @@ function MePage({myName,theirName,startDate,onSettings,pageName,setPageName,myRo
           {[{l:"Your Name",v:sN,s:setSN},{l:"Their Name",v:sT,s:setST}].map(f=><div key={f.l} style={{marginBottom:10}}><div className="lbl" style={{marginBottom:5}}>{f.l}</div><input className="field" value={f.v} onChange={e=>f.s(e.target.value)}/></div>)}
           <button className="btn-p" onClick={()=>{onSettings({myName:sN,theirName:sT,startDate});setShowSet(false);}}>Save</button>
         </div>:<div>{[{l:"Your name",v:myName},{l:"Their name",v:theirName},{l:"Since",v:new Date(startDate).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}].map(r=><div key={r.l} className="srow"><span style={{fontSize:14,fontWeight:500,color:"var(--ink)"}}>{r.l}</span><span className="cap">{r.v}</span></div>)}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   PARTNER PROFILE  (read-only view of them)
+═══════════════════════════════════════════ */
+function PartnerProfilePage({theirName,startDate,theirRole}){
+  const[photo]=useSync("photo_"+theirRole,null);
+  const[bio]=useSync("bio_"+theirRole,"");
+  const days=Math.floor((Date.now()-new Date(startDate))/86400000);const e=calcE(startDate);
+  return(
+    <div className="us-page pf">
+      <div style={{textAlign:"center",paddingBottom:14}}>
+        <div className="av-ring" style={{cursor:"default"}}>{photo?<img src={photo} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="them"/>:<div className="av-ph"><span>👤</span></div>}</div>
+        <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(20px,5.5vw,26px)",fontWeight:600}}>{theirName}</h2>
+        <p className="cap" style={{marginTop:4}}>in love since {new Date(startDate).toLocaleDateString("en-GB",{day:"numeric",month:"long",year:"numeric"})}</p>
+      </div>
+      <div className="card">
+        <h3 className="card-title" style={{marginBottom:12}}>About {theirName}</h3>
+        <p style={{fontSize:14,lineHeight:1.75,color:bio?"var(--ink)":"var(--muted)"}}>{bio||`${theirName} hasn't written a bio yet.`}</p>
+      </div>
+      <div className="card"><h3 className="card-title" style={{marginBottom:12}}>Our Story</h3>
+        <div className="stat-grid">{[{v:`${e.mo}mo ${e.dy}d`,l:"Together"},{v:days,l:"Total Days"},{v:Math.floor(days/7),l:"Weeks"},{v:(days*24).toLocaleString(),l:"Hours"}].map(s=><div key={s.l} className="stat-box"><div className="stat-num">{s.v}</div><div className="stat-lbl">{s.l}</div></div>)}</div>
       </div>
     </div>
   );
@@ -1420,7 +1453,7 @@ function MapPage({pageName,setPageName,myRole,theirRole,myName,theirName}){
    GALLERY PAGE
 ═══════════════════════════════════════════ */
 function GalleryPage({pageName,setPageName,myName}){
-  const storedPin=gs("gal_pin","69420");
+  const[storedPin]=useSync("gal_pin","69420");
   const[unlocked,setUnlocked]=useState(false);
   const[inp,setInp]=useState("");const[pinErr,setPinErr]=useState(false);
   const[cats,setCats]=useSync("gal_cats",DEF_CATS);
@@ -1719,13 +1752,14 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
   const[sT,setST]=useState(theirName);
 
   // Change PINs
+  const[,setGalPin]=useSync("gal_pin","69420");
   const[galDraft,setGalDraft]=useState("");
   const[notesDraft,setNotesDraft]=useState("");
   const[pinMsg,setPinMsg]=useState("");
   const savePins=()=>{
     if(galDraft&&(galDraft.length!==5||!/^\d{5}$/.test(galDraft))){setPinMsg("Gallery PIN must be exactly 5 digits.");return;}
     if(notesDraft&&(notesDraft.length!==5||!/^\d{5}$/.test(notesDraft))){setPinMsg("Notes PIN must be exactly 5 digits.");return;}
-    if(galDraft){ss("gal_pin",galDraft);setGalDraft("");}
+    if(galDraft){setGalPin(galDraft);setGalDraft("");}
     if(notesDraft){ss("notes_pin",notesDraft);setNotesDraft("");}
     setPinMsg((!galDraft&&!notesDraft)?"Enter a new PIN in at least one field.":"PINs updated! Close and reopen the section to use them.");
   };
@@ -2218,14 +2252,12 @@ export default function App(){
   const theirRole=myRole?otherRole(myRole):null;
   // App state
   const[page,setPage]=useState("home");
-  const[myName,setMyName]=useState(()=>ROLE_NAMES.uthmaan);
-  const[theirName,setTheirName]=useState(()=>ROLE_NAMES.areebah);
-  useEffect(()=>{
-    if(!myRole)return;
-    setMyName(gs(`name_${myRole}`,ROLE_NAMES[myRole]));
-    setTheirName(gs(`name_${theirRole}`,ROLE_NAMES[theirRole]));
-  },[myRole]);
-  const[startDate,setStartDate]=useState(()=>gs("start_date",DEF_START));
+  // Custom display names and the anniversary date are shared, permanent
+  // data — synced through Firebase (keyed by role) like everything else,
+  // not left local-only where a history clear would wipe them.
+  const[myName,setMyName]=useSync("name_"+(myRole||"uthmaan"),ROLE_NAMES[myRole||"uthmaan"]);
+  const[theirName,setTheirName]=useSync("name_"+(theirRole||"areebah"),ROLE_NAMES[theirRole||"areebah"]);
+  const[startDate,setStartDate]=useSync("start_date",DEF_START);
   const[names,setNamesState]=useSync("page_names",DEF_NAMES);
   const[moodEmojis,setMoodEmojisState]=useSync("mood_emojis",DEF_MOODS);
   const[connEmoji,setConnEmojiState]=useSync("conn_emoji","💕");
@@ -2290,6 +2322,23 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
     ];
     return()=>unsubs.forEach(u=>u&&u());
   },[tokenReady,myRole]);
+
+  // One-time migration: names and the start date used to live only in this
+  // device's localStorage, before they synced through Firebase. If this
+  // browser still has one of those old local-only values and Firebase has
+  // never seen it, push it across once so nobody's already-customized name
+  // or the real anniversary date gets silently reset to the default.
+  useEffect(()=>{
+    if(!tokenReady||!myRole||!theirRole)return;
+    const legacyMyName=gs(`name_${myRole}`,null);
+    if(legacyMyName&&gs(`sync_name_${myRole}`,null)===null)setMyName(legacyMyName);
+    const legacyTheirName=gs(`name_${theirRole}`,null);
+    if(legacyTheirName&&gs(`sync_name_${theirRole}`,null)===null)setTheirName(legacyTheirName);
+    const legacyStart=gs("start_date",null);
+    if(legacyStart&&gs("sync_start_date",null)===null)setStartDate(legacyStart);
+    const legacyGalPin=gs("gal_pin",null);
+    if(legacyGalPin&&legacyGalPin!=="69420"&&gs("sync_gal_pin",null)===null)dbWrite("room/gal_pin",legacyGalPin).then(()=>ss("sync_gal_pin",legacyGalPin));
+  },[tokenReady,myRole,theirRole]);
   const setTheme=v=>{setThemeState(v);};
   const setBgImage=v=>{setBgImageState(v);};
   const setMoodEmojis=v=>setMoodEmojisState(v);
@@ -2303,7 +2352,7 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
     s.textContent=buildCSS(theme,bgImage);
   },[theme,bgImage]);
 
-  const onSettings=({myName:n,theirName:t,startDate:s})=>{setMyName(n);setTheirName(t);setStartDate(s);ss(`name_${myRole}`,n);ss(`name_${theirRole}`,t);ss("start_date",s);};
+  const onSettings=({myName:n,theirName:t,startDate:s})=>{setMyName(n);setTheirName(t);setStartDate(s);};
   const onAuth=email=>{setUser({email});};
   const makeNameSetter=key=>v=>setNames({...names,[key]:v});
 
@@ -2390,9 +2439,10 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
       <header className="us-hdr">
         {isHome
           ?<><div className="logo">us.</div><div style={{display:"flex",alignItems:"center",gap:8}}>{synced&&<span style={{fontSize:9,fontWeight:700,color:"var(--muted)",display:"flex",alignItems:"center"}}><span className="sync-dot on"/>LIVE</span>}<button style={{background:"none",border:"none",cursor:"pointer",fontSize:10,fontWeight:700,letterSpacing:".12em",textTransform:"uppercase",color:"var(--slate)"}} onClick={()=>setPage("gallery")}>GALLERY</button></div></>
-          :<><button style={{background:"none",border:"none",cursor:"pointer",color:"var(--slate)",display:"flex",padding:2}} onClick={()=>setPage("home")}><IcBack/></button><span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(15px,4.5vw,18px)",fontWeight:600,color:"var(--ink)"}}>{names[page]||DEF_NAMES[page]||""}</span><div style={{width:24}}/></>}
+          :<><button style={{background:"none",border:"none",cursor:"pointer",color:"var(--slate)",display:"flex",padding:2}} onClick={()=>setPage("home")}><IcBack/></button><span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(15px,4.5vw,18px)",fontWeight:600,color:"var(--ink)"}}>{page==="them"?theirName:names[page]||DEF_NAMES[page]||""}</span><div style={{width:24}}/></>}
       </header>
       {page==="home"&&<HomePage myName={myName} theirName={theirName} startDate={startDate} nav={setPage} moodEmojis={moodEmojis} setMoodEmojis={setMoodEmojis} connEmoji={connEmoji} setConnEmoji={setConnEmoji} myRole={myRole} theirRole={theirRole}/>}
+      {page==="them"&&<PartnerProfilePage theirName={theirName} startDate={startDate} theirRole={theirRole}/>}
       {page==="me"&&<MePage myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} pageName={names.me||DEF_NAMES.me} setPageName={makeNameSetter("me")} myRole={myRole}/>}
       {page==="fridge"&&<FridgePage pageName={names.fridge||DEF_NAMES.fridge} setPageName={makeNameSetter("fridge")}/>}
       {page==="dates"&&<DatesPage pageName={names.dates||DEF_NAMES.dates} setPageName={makeNameSetter("dates")}/>}

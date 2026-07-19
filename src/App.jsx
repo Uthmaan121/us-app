@@ -99,13 +99,41 @@ async function refreshFirebaseToken(){
 
 /* ── Firebase Realtime DB REST ──────────────────────────── */
 const dbPath = p => `${FIREBASE_DB_URL}/${p}.json${FIREBASE_ID_TOKEN?`?auth=${encodeURIComponent(FIREBASE_ID_TOKEN)}`:""}`;
-async function dbWrite(path,data){ if(!FIREBASE_DB_URL)return; await fetch(dbPath(path),{method:"PUT",body:JSON.stringify(data),headers:{"Content-Type":"application/json"}}); }
+// Retries a few times on network blips so a failed write can't silently
+// diverge from what's shown locally (that divergence is what used to make
+// data quietly vanish once a later listener refresh pulled the real,
+// never-actually-saved value back down).
+async function dbWrite(path,data){
+  if(!FIREBASE_DB_URL)return false;
+  for(let attempt=0;attempt<3;attempt++){
+    try{
+      const r=await fetch(dbPath(path),{method:"PUT",body:JSON.stringify(data),headers:{"Content-Type":"application/json"}});
+      if(r.ok)return true;
+    }catch{}
+    if(attempt<2)await new Promise(res=>setTimeout(res,400*(attempt+1)));
+  }
+  return false;
+}
 async function dbGet(path){ if(!FIREBASE_DB_URL)return null; try{const r=await fetch(dbPath(path));const d=await r.json();return d;}catch{return null;} }
 function dbListen(path,cb){
   if(!FIREBASE_DB_URL)return()=>{};
   try{
     const es=new EventSource(dbPath(path));
     es.addEventListener("put",e=>{ try{const d=JSON.parse(e.data);if(d&&d.data!==null)cb(d.data);}catch{} });
+    es.addEventListener("error",()=>{});
+    return()=>es.close();
+  }catch{return()=>{};}
+}
+// Like dbListen, but also passes the relative path + event type through —
+// needed by useCollection to apply single-child put/patch events without
+// requiring a full-collection re-send on every write.
+function dbListenRaw(path,onEvent){
+  if(!FIREBASE_DB_URL)return()=>{};
+  try{
+    const es=new EventSource(dbPath(path));
+    const handle=type=>e=>{ try{const d=JSON.parse(e.data);onEvent(type,d.path||"/",d.data);}catch{} };
+    es.addEventListener("put",handle("put"));
+    es.addEventListener("patch",handle("patch"));
     es.addEventListener("error",()=>{});
     return()=>es.close();
   }catch{return()=>{};}
@@ -126,6 +154,56 @@ function useSync(key,def){
   return[val,update];
 }
 
+// Legacy data may still be a plain array (from before collections existed);
+// normalise it into an id-keyed map the same way going forward.
+function arrToMap(v){
+  if(Array.isArray(v))return Object.fromEntries(v.filter(x=>x&&x.id!=null).map(x=>[String(x.id),x]));
+  if(v&&typeof v==="object")return v;
+  return {};
+}
+// For lists that two devices can both add to at once (chat, gallery, fridge
+// notes, map memories). Each item is its own child node at room/{key}/{id},
+// so adding/deleting one item is a small, independent write that can never
+// clobber an item the other device just added — unlike overwriting one big
+// array, where whichever write lands last silently erases whatever the
+// other device had just added a moment earlier.
+function useCollection(key){
+  const[map,setMap]=useState(()=>arrToMap(gs("sync_"+key,{})));
+  const migrated=useRef(false);
+  useEffect(()=>{
+    const u=dbListenRaw("room/"+key,(type,path,data)=>{
+      setMap(prev=>{
+        let next;
+        if(type==="put"){
+          if(path==="/"){ next=arrToMap(data); }
+          else{ const id=path.replace(/^\//,"").split("/")[0]; next={...prev}; if(data===null)delete next[id]; else next[id]=data; }
+        }else{ // "patch": data is {childId:value,...} relative to path (always "/" for us)
+          next={...prev};
+          Object.entries(data||{}).forEach(([id,v])=>{ if(v===null)delete next[id]; else next[id]=v; });
+        }
+        ss("sync_"+key,next);
+        return next;
+      });
+    });
+    // One-time migration: if the room still has this list stored as a raw
+    // array from before collections existed, convert it to the id-keyed
+    // shape once so future writes are per-item, not whole-list overwrites.
+    // Written one item at a time (never a whole-node overwrite) so it can
+    // never race with — and wipe out — something just added concurrently.
+    if(!migrated.current){
+      migrated.current=true;
+      dbGet("room/"+key).then(v=>{ if(Array.isArray(v)&&v.length)Object.entries(arrToMap(v)).forEach(([id,item])=>dbWrite(`room/${key}/${id}`,item)); });
+    }
+    return u;
+  },[key]);
+  const setItem=useCallback((id,val)=>{
+    setMap(prev=>{ const next={...prev}; if(val===null)delete next[id]; else next[id]=val; ss("sync_"+key,next); return next; });
+    dbWrite(`room/${key}/${id}`,val);
+  },[key]);
+  const items=Object.values(map);
+  return[items,setItem];
+}
+
 /* ── Utils ──────────────────────────────────────────────── */
 function hav(la1,lo1,la2,lo2){
   const R=6371,d=Math.PI/180,dlat=(la2-la1)*d,dlon=(lo2-lo1)*d;
@@ -133,6 +211,44 @@ function hav(la1,lo1,la2,lo2){
   return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }
 const fmtDist=km=>{const mi=km*0.621371;return mi<0.1?`${Math.round(mi*5280)} ft`:`${mi.toFixed(1)} mi`;};
+const fmtMi=mi=>mi<0.1?`${Math.round(mi*5280)} ft`:`${mi.toFixed(1)} mi`;
+
+// Real driving distance (free public OSRM router — no key) instead of
+// straight-line haversine, which was reading noticeably short (e.g. ~170mi
+// "as the crow flies" for a real ~240mi road trip). Coordinates are rounded
+// for the cache key since GPS jitters a few metres between reads.
+const _routeCache=new Map();
+async function drivingDistanceMi(aLat,aLon,bLat,bLon){
+  const key=`${aLat.toFixed(3)},${aLon.toFixed(3)}|${bLat.toFixed(3)},${bLon.toFixed(3)}`;
+  if(_routeCache.has(key))return _routeCache.get(key);
+  try{
+    const url=`https://router.project-osrm.org/route/v1/driving/${aLon},${aLat};${bLon},${bLat}?overview=false`;
+    const r=await fetch(url);
+    const d=await r.json();
+    if(d.code==="Ok"&&d.routes&&d.routes[0]){
+      const mi=d.routes[0].distance/1609.344;
+      _routeCache.set(key,mi);
+      return mi;
+    }
+  }catch{}
+  return null;
+}
+// Shows the straight-line distance instantly, then swaps in the real
+// driving distance once OSRM responds (falls back to straight-line if the
+// free router is unreachable — still accurate, just not road-based).
+function useDistance(aLoc,bLoc){
+  const[mi,setMi]=useState(null);
+  const[mode,setMode]=useState("straight");
+  const aLat=aLoc?.lat,aLon=aLoc?.lon,bLat=bLoc?.lat,bLon=bLoc?.lon;
+  useEffect(()=>{
+    if(aLat==null||aLon==null||bLat==null||bLon==null){setMi(null);return;}
+    let cancelled=false;
+    setMi(hav(aLat,aLon,bLat,bLon)*0.621371);setMode("straight");
+    drivingDistanceMi(aLat,aLon,bLat,bLon).then(d=>{ if(!cancelled&&d!=null){setMi(d);setMode("driving");} });
+    return()=>{cancelled=true;};
+  },[aLat,aLon,bLat,bLon]);
+  return[mi,mode];
+}
 function calcE(s){
   let d=Math.max(0,Math.floor((Date.now()-new Date(s))/1000));
   const yr=Math.floor(d/31557600);d-=yr*31557600;const mo=Math.floor(d/2629800);d-=mo*2629800;
@@ -160,6 +276,49 @@ async function compressImg(file,maxPx=1080,q=0.65){
   });
 }
 
+// Re-encodes a video client-side (downscaled resolution + bitrate) so it's
+// small enough to store as base64 in Firebase like photos, instead of the
+// local-only blob URL that used to vanish on refresh. Real-time transcode —
+// takes roughly as long as the clip itself. Falls back to `null` (caller
+// then stores the original if it's small enough) on devices that don't
+// support captureStream/MediaRecorder (some older iOS Safari versions).
+async function compressVideo(file,{maxW=640,videoBitsPerSecond=800000,audioBitsPerSecond=96000}={}){
+  return new Promise((resolve)=>{
+    if(typeof MediaRecorder==="undefined"){resolve(null);return;}
+    const video=document.createElement("video");
+    video.muted=true;video.playsInline=true;video.src=URL.createObjectURL(file);
+    const cleanup=()=>URL.revokeObjectURL(video.src);
+    video.onloadedmetadata=()=>{
+      if(!video.captureStream&&!video.mozCaptureStream){cleanup();resolve(null);return;}
+      const scale=Math.min(1,maxW/Math.max(video.videoWidth||maxW,video.videoHeight||maxW));
+      const w=Math.max(2,Math.round((video.videoWidth||maxW)*scale)),h=Math.max(2,Math.round((video.videoHeight||maxW)*scale));
+      const canvas=document.createElement("canvas");canvas.width=w;canvas.height=h;
+      const ctx=canvas.getContext("2d");
+      let combined;
+      try{
+        const canvasStream=canvas.captureStream(24);
+        const srcStream=video.captureStream?video.captureStream():video.mozCaptureStream();
+        combined=new MediaStream([...canvasStream.getVideoTracks(),...srcStream.getAudioTracks()]);
+      }catch{ cleanup();resolve(null);return; }
+      const mimeCandidates=["video/mp4;codecs=h264","video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"];
+      const mimeType=mimeCandidates.find(m=>MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported(m))||"";
+      let rec;
+      try{ rec=new MediaRecorder(combined,{mimeType:mimeType||undefined,videoBitsPerSecond,audioBitsPerSecond}); }
+      catch{ cleanup();resolve(null);return; }
+      const chunks=[];
+      rec.ondataavailable=e=>{if(e.data.size>0)chunks.push(e.data);};
+      let drawing=true;
+      rec.onstop=()=>{ drawing=false; cleanup(); resolve(new Blob(chunks,{type:mimeType||"video/webm"})); };
+      const draw=()=>{ if(!drawing)return; try{ctx.drawImage(video,0,0,w,h);}catch{} requestAnimationFrame(draw); };
+      video.onended=()=>{ if(rec.state!=="inactive")rec.stop(); };
+      video.onerror=()=>{ if(rec.state!=="inactive")rec.stop(); else resolve(null); };
+      video.onplay=()=>{ rec.start(250); draw(); };
+      video.play().catch(()=>{cleanup();resolve(null);});
+    };
+    video.onerror=()=>{cleanup();resolve(null);};
+  });
+}
+
 /* ── Free place research (OpenStreetMap — no API key, no cost) ─ */
 async function researchPlaces(dateType,location){
   const resp=await fetch("/.netlify/functions/places",{
@@ -170,6 +329,43 @@ async function researchPlaces(dateType,location){
   const data=await resp.json().catch(()=>({}));
   if(!resp.ok||data.error)throw new Error(data.error||"Server error "+resp.status+".");
   return Array.isArray(data.results)?data.results:[];
+}
+
+/* ── Push notifications (Web Push + self-generated VAPID keys — free,
+   no Firebase Cloud Messaging / paid plan needed) ─────────────────────── */
+const VAPID_PUBLIC_KEY="BMnFJm75kQxJjk4lzqBRe4FkktsgsV-NB6XtXsy0LlQpb3t9ry0ekojOqDItB0nz4Hi_NW03223wMdERrFYr470";
+function urlBase64ToUint8Array(base64String){
+  const padding="=".repeat((4-base64String.length%4)%4);
+  const base64=(base64String+padding).replace(/-/g,"+").replace(/_/g,"/");
+  const raw=atob(base64);
+  return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));
+}
+async function subscribeToPush(myRole){
+  if(!("serviceWorker" in navigator)||!("PushManager" in window))return"unsupported";
+  try{
+    let perm=Notification.permission;
+    if(perm==="default")perm=await Notification.requestPermission();
+    if(perm!=="granted")return"denied";
+    const reg=await navigator.serviceWorker.ready;
+    let sub=await reg.pushManager.getSubscription();
+    if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC_KEY)});
+    await dbWrite(`room/push_sub_${myRole}`,sub.toJSON());
+    return"granted";
+  }catch{ return"error"; }
+}
+// Fire-and-forget — best-effort notify of the other account. Never blocks
+// or throws into the caller; a missed push just means no banner, nothing
+// data-related depends on it.
+async function notifyOther(theirRole,title,body){
+  if(!theirRole)return;
+  try{
+    const sub=await dbGet(`room/push_sub_${theirRole}`);
+    if(!sub||!sub.endpoint)return;
+    await fetch("/.netlify/functions/push",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({subscription:sub,title,body}),
+    });
+  }catch{}
 }
 
 /* ── Defaults ───────────────────────────────────────────── */
@@ -189,13 +385,10 @@ const IDEAS_DEF=[
 ];
 const THEMES={
   blush:{name:"Blush",bg:"#FCF0EC",sf:"#fff",rose:"#F3DDD5",deep:"#EDD0C4",accent:"#C45450",ink:"#1A1512"},
-  midnight:{name:"Midnight",bg:"#0F0F14",sf:"#1A1A24",rose:"#2A1F2E",deep:"#1E1528",accent:"#B06FD8",ink:"#F0EAF5"},
-  forest:{name:"Forest",bg:"#F0F4F0",sf:"#fff",rose:"#D5E8D5",deep:"#C4DCCA",accent:"#3D7A54",ink:"#1A2A1F"},
-  ocean:{name:"Ocean",bg:"#EFF5FB",sf:"#fff",rose:"#D4E6F5",deep:"#C4D8F0",accent:"#2A72B5",ink:"#0F1F30"},
-  sand:{name:"Sand",bg:"#FAF5ED",sf:"#fff",rose:"#EDE0CF",deep:"#E0D0B8",accent:"#A07840",ink:"#2A1F10"},
-  // Opt-in preview only — never the default. Selecting it doesn't change any
-  // of the five themes above; it's purely an extra option to try.
-  claudetest:{name:"Claude Theme Test",bg:"#16130F",sf:"#221D18",rose:"#2E2620",deep:"#271F19",accent:"#E67E4D",ink:"#F6EEE6"},
+  lavender:{name:"Lavender",bg:"#F6F1FB",sf:"#fff",rose:"#E7DBF5",deep:"#DAC7EE",accent:"#8A5FC4",ink:"#231A2E"},
+  sunset:{name:"Sunset",bg:"#FFF3EA",sf:"#fff",rose:"#FBE0CC",deep:"#F6CBA6",accent:"#E0783A",ink:"#2B1A0E"},
+  sage:{name:"Sage",bg:"#F1F5EF",sf:"#fff",rose:"#DEE8D8",deep:"#CBDCC1",accent:"#5A8A5E",ink:"#182119"},
+  noir:{name:"Noir",bg:"#141216",sf:"#1E1B21",rose:"#2C2530",deep:"#241F28",accent:"#D68FA0",ink:"#F3ECEF"},
 };
 const NAV_IDS=["home","me","fridge","dates","map","gallery","notes","settings"];
 
@@ -283,9 +476,11 @@ body{font-family:'Inter',-apple-system,sans-serif;color:var(--ink);-webkit-font-
 .mb.on::after{content:'';position:absolute;bottom:3px;left:50%;transform:translateX(-50%);width:4px;height:4px;background:var(--accent);border-radius:50%}
 .note-bar{display:flex;align-items:center;gap:8px;background:color-mix(in srgb,var(--ink) 6%,transparent);border-radius:50px;padding:9px 13px;margin-top:10px}
 .chat-scroll{height:210px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:2px 2px 4px}
-.chat-row{display:flex;justify-content:flex-start}
+.chat-row{display:flex;justify-content:flex-start;width:100%}
 .chat-row.me{justify-content:flex-end}
-.chat-bubble{max-width:78%;padding:8px 13px;border-radius:16px;font-size:13px;line-height:1.45;word-break:break-word;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.chat-row-inner{display:flex;flex-direction:column;align-items:flex-start;max-width:78%;min-width:0}
+.chat-row.me .chat-row-inner{align-items:flex-end}
+.chat-bubble{width:fit-content;max-width:100%;padding:8px 13px;border-radius:16px;font-size:13px;line-height:1.45;overflow-wrap:break-word;box-shadow:0 1px 3px rgba(0,0,0,.06)}
 .chat-time{font-size:9px;color:var(--muted);margin-top:2px;padding:0 4px}
 .note-inp{flex:1;border:none;background:none;font-size:14px;color:var(--ink);outline:none}.note-inp::placeholder{color:var(--muted)}
 .btn-p{width:100%;padding:13px;background:linear-gradient(135deg,var(--accent),color-mix(in srgb,var(--accent) 80%,#f99));color:#fff;border:none;border-radius:13px;font-size:14px;font-weight:600;letter-spacing:.04em;cursor:pointer}
@@ -386,10 +581,10 @@ body{font-family:'Inter',-apple-system,sans-serif;color:var(--ink);-webkit-font-
   .bday-card-today{background:linear-gradient(135deg,var(--deep) 0%,var(--rose) 100%);border-radius:var(--r);padding:18px;margin-bottom:10px;box-shadow:var(--sh);text-align:center;position:relative;overflow:hidden}
   .bday-card-norm{background:var(--sf);border-radius:var(--r);padding:16px 18px;margin-bottom:10px;box-shadow:var(--sh)}
   .bday-soon-badge{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);display:block;margin-top:2px}
-${theme==='claudetest'?`
-/* ── Claude Theme Test — opt-in polish pass, only active on this theme ── */
-body{background:radial-gradient(ellipse 900px 500px at 50% -8%,${t.rose} 0%,${t.bg} 60%)}
-.card{background:linear-gradient(160deg,color-mix(in srgb,${t.sf} 94%,#fff 6%) 0%,${t.sf} 100%);border:1px solid ${t.accent}20;box-shadow:0 1px 0 ${t.accent}14 inset,0 12px 30px rgba(0,0,0,.3)}
+/* ── Polish pass: richer gradients, glossy buttons, deeper shadows —
+   applied on every theme, driven by that theme's own colour variables. ── */
+body{background:radial-gradient(ellipse 900px 500px at 50% -8%,${t.rose} 0%,${t.bg} 60%) fixed}
+.card{background:linear-gradient(160deg,color-mix(in srgb,${t.sf} 94%,#fff 6%) 0%,${t.sf} 100%);border:1px solid ${t.accent}20;box-shadow:0 1px 0 ${t.accent}14 inset,0 12px 30px rgba(0,0,0,.16)}
 .card-title{position:relative;padding-left:13px}
 .card-title::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);width:4px;height:15px;background:linear-gradient(${t.accent},color-mix(in srgb,${t.accent} 55%,#fff 45%));border-radius:3px}
 .btn-p{background:linear-gradient(155deg,color-mix(in srgb,${t.accent} 90%,#fff 18%),${t.accent} 55%,color-mix(in srgb,${t.accent} 82%,#000 18%));box-shadow:0 1px 0 rgba(255,255,255,.28) inset,0 10px 22px ${t.accent}40;letter-spacing:.04em;transition:transform .12s}
@@ -397,12 +592,18 @@ body{background:radial-gradient(ellipse 900px 500px at 50% -8%,${t.rose} 0%,${t.
 .us-hdr{background:linear-gradient(${t.bg},${t.bg}00)!important}
 .us-nav{position:relative}
 .us-nav::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,${t.accent}66,transparent)}
-.ctr-card{box-shadow:0 16px 36px rgba(0,0,0,.38),0 0 0 1px ${t.accent}22 inset}
-.sticky,.dist-card,.place-card,.mem-card,.date-history-card,.theme-card,.stat-box{box-shadow:0 8px 22px rgba(0,0,0,.24)!important}
-.auth-title,.logo{text-shadow:0 2px 16px ${t.accent}40}
+.ctr-card{box-shadow:0 16px 36px rgba(0,0,0,.2),0 0 0 1px ${t.accent}22 inset}
+.sticky,.dist-card,.place-card,.mem-card,.date-history-card,.theme-card,.stat-box{box-shadow:0 8px 22px rgba(0,0,0,.12)!important}
+.auth-title,.logo{text-shadow:0 2px 16px ${t.accent}30}
 .btn-i.btn-ia{box-shadow:0 8px 18px ${t.accent}48!important}
-.pin-key,.av-ring,.prof-circle{box-shadow:0 8px 20px rgba(0,0,0,.28)!important}
-`:''}
+.pin-key,.av-ring,.prof-circle{box-shadow:0 8px 20px rgba(0,0,0,.16)!important}
+/* Subtle, always-on motion — slow enough to read as ambience, not distraction */
+@keyframes blobDrift{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-14px,10px) scale(1.06)}}
+.ctr-card::after{animation:blobDrift 9s ease-in-out infinite}
+@keyframes glowPulse{0%,100%{opacity:.55}50%{opacity:1}}
+.sync-dot.on{animation:glowPulse 1.8s ease-in-out infinite}
+@keyframes softFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+.mood-badge{animation:softFloat 3.2s ease-in-out infinite}
 `;}
 
 /* ── Icons ──────────────────────────────────────────────── */
@@ -977,7 +1178,8 @@ function CounterCard({startDate}){
    MOOD CARD
 ═══════════════════════════════════════════ */
 function ChatCard({myRole,theirRole,theirName}){
-  const[messages,setMessages]=useSync("chat_messages",[]);
+  const[msgItems,setMsgItem]=useCollection("chat_messages");
+  const messages=[...msgItems].sort((a,b)=>a.ts-b.ts);
   const[draft,setDraft]=useState("");
   const scrollRef=useRef(null);
   useEffect(()=>{
@@ -986,12 +1188,19 @@ function ChatCard({myRole,theirRole,theirName}){
   },[messages.length]);
   const send=()=>{
     if(!draft.trim())return;
-    // Keep the synced payload bounded — this is a live 2-person chat, not an
-    // archive; trimming old messages keeps every write small and instant.
-    const next=[...messages,{id:Date.now()+Math.random(),text:draft.trim(),author:myRole,ts:Date.now()}].slice(-150);
-    setMessages(next);
+    const id=Date.now()+"_"+Math.random().toString(36).slice(2);
+    setMsgItem(id,{id,text:draft.trim(),author:myRole,ts:Date.now()});
     setDraft("");
+    notifyOther(theirRole,`${ROLE_NAMES[myRole]} sent a message`,draft.trim().slice(0,120));
   };
+  // Keep the synced list bounded — this is a live 2-person chat, not an
+  // archive. Each item is its own node, so trimming just deletes the
+  // oldest few child keys instead of rewriting everything.
+  useEffect(()=>{
+    if(messages.length>220){
+      messages.slice(0,messages.length-150).forEach(m=>setMsgItem(m.id,null));
+    }
+  },[messages.length]);
   return(
     <div className="card" style={{paddingBottom:12}}>
       <div className="card-hdr" style={{marginBottom:6}}>
@@ -1005,7 +1214,7 @@ function ChatCard({myRole,theirRole,theirName}){
             const mine=m.author===myRole;
             return(
               <div key={m.id} className={`chat-row${mine?" me":""}`}>
-                <div style={{display:"flex",flexDirection:"column",alignItems:mine?"flex-end":"flex-start"}}>
+                <div className="chat-row-inner">
                   <div className="chat-bubble" style={{background:mine?"var(--accent)":`color-mix(in srgb, ${ROLE_COLORS[m.author]||"var(--ink)"} 16%, var(--rose))`,color:mine?"#fff":"var(--ink)"}}>{m.text}</div>
                   <span className="chat-time">{ago(m.ts)}</span>
                 </div>
@@ -1029,9 +1238,9 @@ function DistanceCard({myRole,theirRole}){
   const[theirLoc]=useSync("loc_"+theirRole,null);
   const[liveOn,setLiveOn]=useSync("live_loc_"+myRole,false);
   const[loading,setLoading]=useState(false);const[open,setOpen]=useState(false);
-  const dist=myLoc&&theirLoc?hav(myLoc.lat,myLoc.lon,theirLoc.lat,theirLoc.lon):null;
-  const sub=!myLoc?"Share your location":!theirLoc?"Waiting on them…":`${fmtDist(dist)} apart`;
-  const pct=dist?Math.max(5,Math.min(95,100-dist/5)):0;
+  const[distMi,distMode]=useDistance(myLoc,theirLoc);
+  const sub=!myLoc?"Share your location":!theirLoc?"Waiting on them…":`${fmtMi(distMi)} apart${distMode==="driving"?" 🚗":""}`;
+  const pct=distMi?Math.max(5,Math.min(95,100-distMi/3)):0;
   const share=()=>{
     if(!navigator.geolocation){alert("Geolocation not supported.");return;}
     setLoading(true);
@@ -1046,7 +1255,7 @@ function DistanceCard({myRole,theirRole}){
         <div style={{flex:1,minWidth:0}}>
           <div className="lbl" style={{marginBottom:3}}>Distance{liveOn&&<span style={{color:"#4CAF50"}}> · live</span>}</div>
           <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(15px,4.5vw,18px)",fontWeight:600,color:"var(--ink)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{sub}</div>
-          {dist!=null&&<div className="dist-bar"><div className="dist-fill" style={{width:`${pct}%`}}/></div>}
+          {distMi!=null&&<div className="dist-bar"><div className="dist-fill" style={{width:`${pct}%`}}/></div>}
         </div>
         {myLoc&&<span style={{fontSize:11,color:"var(--muted)",flexShrink:0}}>{ago(myLoc.ts)}</span>}
         <span style={{color:"var(--muted)",transform:open?"rotate(180deg)":"",transition:".2s",display:"flex",flexShrink:0}}><IcChevD/></span>
@@ -1207,8 +1416,9 @@ function PartnerProfilePage({theirName,startDate,theirRole}){
    FRIDGE PAGE
 ═══════════════════════════════════════════ */
 const VOICE_NOTE_MAX_SEC=90;
-function FridgePage({pageName,setPageName,myRole}){
-  const[notes,setNotes]=useSync("fridge_notes",[]);
+function FridgePage({pageName,setPageName,myRole,theirRole}){
+  const[noteItems,setNoteItem]=useCollection("fridge_notes");
+  const notes=[...noteItems].sort((a,b)=>a.ts-b.ts);
   const[modal,setModal]=useState(false);const[txt,setTxt]=useState("");const[col,setCol]=useState(NOTE_COLS[0]);
   const[editingId,setEditingId]=useState(null);
   const[expandId,setExpandId]=useState(null);
@@ -1267,11 +1477,17 @@ function FridgePage({pageName,setPageName,myRole}){
   const save=()=>{
     if(!txt.trim()&&!audioData)return;
     const payload={text:txt.trim(),color:col,audioData:audioData||null,audioSecs:audioData?audioSecs:0};
-    if(editingId)setNotes(notes.map(n=>n.id===editingId?{...n,...payload}:n));
-    else setNotes([...notes,{id:Date.now(),...payload,ts:Date.now(),author:myRole}]);
+    if(editingId){
+      const existing=notes.find(n=>n.id===editingId);
+      setNoteItem(editingId,{...existing,...payload});
+    }else{
+      const id=Date.now()+"_"+Math.random().toString(36).slice(2);
+      setNoteItem(id,{id,...payload,ts:Date.now(),author:myRole});
+      notifyOther(theirRole,`${ROLE_NAMES[myRole]} stuck a new note`,txt.trim().slice(0,120)||"🎤 Voice note");
+    }
     resetComposer();setModal(false);setEditingId(null);
   };
-  const del=id=>ask("Delete this note?",()=>{setNotes(notes.filter(n=>n.id!==id));setExpandId(null);});
+  const del=id=>ask("Delete this note?",()=>{setNoteItem(id,null);setExpandId(null);});
   const expanded=notes.find(n=>n.id===expandId);
   return(
     <div className="us-page pf">
@@ -1534,10 +1750,10 @@ function memoryDivIcon(selected){
 /* Real interactive satellite map (Leaflet + free Esri World Imagery tiles —
    no API key). Markers/line update in place rather than re-creating the map
    on every render, so panning/zooming stays smooth. */
-function LeafletMap({myLoc,theirLoc,myRole,theirRole,myPhoto,theirPhoto,memories,selId,onSelectMemory,view}){
+function LeafletMap({myLoc,theirLoc,myRole,theirRole,myPhoto,theirPhoto,memories,selId,onSelectMemory,view,distMi,distMode,memDistMi,memDistMode}){
   const elRef=useRef(null);
   const mapRef=useRef(null);
-  const layersRef=useRef({me:null,them:null,line:null,distLabel:null,mem:new Map()});
+  const layersRef=useRef({me:null,them:null,line:null,distLabel:null,memLine:null,memDistLabel:null,mem:new Map()});
 
   useEffect(()=>{
     if(!elRef.current||mapRef.current)return;
@@ -1569,18 +1785,37 @@ function LeafletMap({myLoc,theirLoc,myRole,theirRole,myPhoto,theirPhoto,memories
       else{L_.them.setLatLng(ll);L_.them.setIcon(avatarDivIcon(theirPhoto,"💁",ROLE_COLORS[theirRole]||"#D6407D"));}
     }else if(L_.them){L_.them.remove();L_.them=null;}
 
-    if(myLoc&&theirLoc){
+    const selected=memories.find(m=>m.id===selId);
+
+    // Me <-> them connecting line — hidden while a memory is selected, so
+    // the me <-> memory line below isn't cluttered/ambiguous with it.
+    if(myLoc&&theirLoc&&!selected){
       const a=[myLoc.lat,myLoc.lon],b=[theirLoc.lat,theirLoc.lon];
       if(!L_.line)L_.line=L.polyline([a,b],{color:"#fff",weight:2,opacity:.85,dashArray:"6,8"}).addTo(map);
       else L_.line.setLatLngs([a,b]);
       const mid=[(a[0]+b[0])/2,(a[1]+b[1])/2];
-      const distTxt=fmtDist(hav(a[0],a[1],b[0],b[1]));
-      const distIcon=L.divIcon({className:"",html:`<div style="background:rgba(0,0,0,.72);color:#fff;font-size:11px;font-weight:700;padding:4px 9px;border-radius:50px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.3)">${distTxt} apart</div>`,iconSize:[0,0]});
+      const distTxt=distMi!=null?fmtMi(distMi):fmtDist(hav(a[0],a[1],b[0],b[1]));
+      const distIcon=L.divIcon({className:"",html:`<div style="background:rgba(0,0,0,.72);color:#fff;font-size:11px;font-weight:700;padding:4px 9px;border-radius:50px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.3)">${distTxt} apart${distMode==="driving"?" 🚗":""}</div>`,iconSize:[0,0]});
       if(!L_.distLabel)L_.distLabel=L.marker(mid,{icon:distIcon,interactive:false}).addTo(map);
       else{L_.distLabel.setLatLng(mid);L_.distLabel.setIcon(distIcon);}
     }else{
       if(L_.line){L_.line.remove();L_.line=null;}
       if(L_.distLabel){L_.distLabel.remove();L_.distLabel=null;}
+    }
+
+    // Me <-> selected memory connecting line + distance
+    if(myLoc&&selected){
+      const a=[myLoc.lat,myLoc.lon],b=[selected.lat,selected.lon];
+      if(!L_.memLine)L_.memLine=L.polyline([a,b],{color:"var(--accent,#C45450)",weight:2,opacity:.9,dashArray:"6,8"}).addTo(map);
+      else L_.memLine.setLatLngs([a,b]);
+      const mid=[(a[0]+b[0])/2,(a[1]+b[1])/2];
+      const distTxt=memDistMi!=null?fmtMi(memDistMi):fmtDist(hav(a[0],a[1],b[0],b[1]));
+      const distIcon=L.divIcon({className:"",html:`<div style="background:rgba(0,0,0,.72);color:#fff;font-size:11px;font-weight:700;padding:4px 9px;border-radius:50px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.3)">${distTxt} away${memDistMode==="driving"?" 🚗":""}</div>`,iconSize:[0,0]});
+      if(!L_.memDistLabel)L_.memDistLabel=L.marker(mid,{icon:distIcon,interactive:false}).addTo(map);
+      else{L_.memDistLabel.setLatLng(mid);L_.memDistLabel.setIcon(distIcon);}
+    }else{
+      if(L_.memLine){L_.memLine.remove();L_.memLine=null;}
+      if(L_.memDistLabel){L_.memDistLabel.remove();L_.memDistLabel=null;}
     }
 
     // Memory pins — rebuilt each time; personal-app scale, not a perf concern
@@ -1593,7 +1828,7 @@ function LeafletMap({myLoc,theirLoc,myRole,theirRole,myPhoto,theirPhoto,memories
       mk.addTo(map);
       L_.mem.set(m.id,mk);
     });
-  },[myLoc,theirLoc,myRole,theirRole,myPhoto,theirPhoto,memories,selId,onSelectMemory]);
+  },[myLoc,theirLoc,myRole,theirRole,myPhoto,theirPhoto,memories,selId,onSelectMemory,distMi,distMode,memDistMi,memDistMode]);
 
   // Camera — reacts to the view toggle and to a selected memory
   useEffect(()=>{
@@ -1616,7 +1851,8 @@ function LeafletMap({myLoc,theirLoc,myRole,theirRole,myPhoto,theirPhoto,memories
 }
 
 function MapPage({pageName,setPageName,myRole,theirRole,myName,theirName}){
-  const[memories,setMemories]=useSync("map_memories",[]);
+  const[memItems,setMemItem]=useCollection("map_memories");
+  const memories=[...memItems].sort((a,b)=>a.ts-b.ts);
   const[myLoc,setMyLoc]=useSync("loc_"+myRole,null);
   const[theirLoc]=useSync("loc_"+theirRole,null);
   const[myPhoto]=useSync("photo_"+myRole,null);
@@ -1627,11 +1863,19 @@ function MapPage({pageName,setPageName,myRole,theirRole,myName,theirName}){
   const[pending,setPending]=useState(null);const[noteText,setNoteText]=useState("");
   const[gettingLoc,setGettingLoc]=useState(false);
   const[ask,confirmDialog]=useConfirm();
-  const dist=myLoc&&theirLoc?hav(myLoc.lat,myLoc.lon,theirLoc.lat,theirLoc.lon):null;
-  const pct=dist!=null?Math.max(4,Math.min(96,100-dist/5)):null;
+  const[distMi,distMode]=useDistance(myLoc,theirLoc);
+  const pct=distMi!=null?Math.max(4,Math.min(96,100-distMi/3)):null;
+  const selectedMemory=memories.find(m=>m.id===selId);
+  const[memDistMi,memDistMode]=useDistance(myLoc,selectedMemory?{lat:selectedMemory.lat,lon:selectedMemory.lon}:null);
 
-  const saveMemory=()=>{if(!pending)return;const m={id:Date.now(),lat:pending.lat,lon:pending.lon,note:noteText.trim()||"Memory",ts:Date.now()};setMemories([...memories,m]);setSelId(m.id);setNoteText("");setPending(null);setAdding(false);};
-  const delMemory=id=>ask("Delete this memory pin?",()=>{setMemories(memories.filter(m=>m.id!==id));if(selId===id)setSelId(null);});
+  const saveMemory=()=>{
+    if(!pending)return;
+    const id=Date.now()+"_"+Math.random().toString(36).slice(2);
+    const m={id,lat:pending.lat,lon:pending.lon,note:noteText.trim()||"Memory",ts:Date.now(),author:myRole};
+    setMemItem(id,m);setSelId(id);setNoteText("");setPending(null);setAdding(false);
+    notifyOther(theirRole,`${ROLE_NAMES[myRole]} pinned a memory`,m.note.slice(0,120));
+  };
+  const delMemory=id=>ask("Delete this memory pin?",()=>{setMemItem(id,null);if(selId===id)setSelId(null);});
   const findMe=()=>{
     if(!navigator.geolocation){alert("Geolocation not supported.");return;}
     setGettingLoc(true);
@@ -1657,7 +1901,7 @@ function MapPage({pageName,setPageName,myRole,theirRole,myName,theirName}){
               {pct!=null&&<div className="dist-fill" style={{width:`${pct}%`}}/>}
             </div>
             <div style={{textAlign:"center",fontFamily:"'Cormorant Garamond',serif",fontSize:"clamp(15px,4.5vw,19px)",fontWeight:700,color:"var(--ink)"}}>
-              {dist!=null?fmtDist(dist):myLoc&&!theirLoc?`Waiting on ${theirName}…`:!myLoc&&theirLoc?"Share your location":"Distance unknown"}
+              {distMi!=null?`${fmtMi(distMi)}${distMode==="driving"?" 🚗":""}`:myLoc&&!theirLoc?`Waiting on ${theirName}…`:!myLoc&&theirLoc?"Share your location":"Distance unknown"}
             </div>
           </div>
           <Avatar photo={theirPhoto} emoji="💁" size={38}/>
@@ -1686,7 +1930,8 @@ function MapPage({pageName,setPageName,myRole,theirRole,myName,theirName}){
       {/* Real satellite map — both pins, a connecting line + distance when you have both, zooms out to fit on "Both" */}
       <div style={{position:"relative",marginBottom:8,borderRadius:"var(--r)",overflow:"hidden",boxShadow:"var(--sh-md)"}}>
         <LeafletMap myLoc={myLoc} theirLoc={theirLoc} myRole={myRole} theirRole={theirRole} myPhoto={myPhoto} theirPhoto={theirPhoto}
-          memories={memories} selId={selId} onSelectMemory={id=>setSelId(selId===id?null:id)} view={view}/>
+          memories={memories} selId={selId} onSelectMemory={id=>setSelId(selId===id?null:id)} view={view}
+          distMi={distMi} distMode={distMode} memDistMi={memDistMi} memDistMode={memDistMode}/>
       </div>
 
       {memories.length===0?<div className="empty" style={{padding:"22px 20px"}}><div className="empty-e">📍</div><p className="empty-t">No memories pinned yet.<br/>Tap + above to drop your first one.</p></div>
@@ -1694,7 +1939,7 @@ function MapPage({pageName,setPageName,myRole,theirRole,myName,theirName}){
           <div className="mem-dot"><IcPin/></div>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontWeight:600,fontSize:14,marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.note}</div>
-            <div className="cap">{fmtDL(m.ts)}{myLoc?` · ${fmtDist(hav(myLoc.lat,myLoc.lon,m.lat,m.lon))} from you`:""}</div>
+            <div className="cap">{fmtDL(m.ts)}{myLoc?` · ${m.id===selId&&memDistMi!=null?fmtMi(memDistMi)+(memDistMode==="driving"?" 🚗":""):fmtDist(hav(myLoc.lat,myLoc.lon,m.lat,m.lon))} from you`:""}</div>
           </div>
           <button onClick={e=>{e.stopPropagation();delMemory(m.id);}} style={{background:"none",border:"none",cursor:"pointer",color:"var(--muted)",display:"flex",padding:3}}><IcTrash/></button>
         </div>)}</div>}
@@ -1721,12 +1966,14 @@ function GalleryPage({pageName,setPageName,myName}){
   const[unlocked,setUnlocked]=useState(false);
   const[inp,setInp]=useState("");const[pinErr,setPinErr]=useState(false);
   const[cats,setCats]=useSync("gal_cats",DEF_CATS);
-  const[photos,setPhotos]=useSync("gal_photos",[]);
+  const[photoItems,setPhotoItem]=useCollection("gal_photos");
+  const photos=[...photoItems].sort((a,b)=>a.ts-b.ts);
   const[selCat,setSelCat]=useState("all");
   const[lightbox,setLightbox]=useState(null);
   const[addCatM,setAddCatM]=useState(false);
   const[newCatLabel,setNewCatLabel]=useState("");const[newCatEmoji,setNewCatEmoji]=useState("📸");
   const[uploading,setUploading]=useState(false);
+  const[uploadMsg,setUploadMsg]=useState("");
   const[ask,confirmDialog]=useConfirm();
   const fileRef=useRef();
 
@@ -1740,20 +1987,32 @@ function GalleryPage({pageName,setPageName,myName}){
   const handleUpload=async e=>{
     setUploading(true);
     const files=Array.from(e.target.files);
-    const newItems=[];
-    for(const f of files){
+    for(let i=0;i<files.length;i++){
+      const f=files[i];
+      const id=Date.now()+"_"+Math.random().toString(36).slice(2);
       if(f.type.startsWith("image/")){
+        setUploadMsg(`Photo ${i+1}/${files.length}…`);
         const b64=await compressImg(f,1080,0.65);
-        if(b64)newItems.push({id:Date.now()+Math.random(),type:"photo",src:b64,catId:selCat==="all"?"together":selCat,ts:Date.now(),uploader:myName||"Me"});
+        if(b64)setPhotoItem(id,{id,type:"photo",src:b64,catId:selCat==="all"?"together":selCat,ts:Date.now(),uploader:myName||"Me"});
       }else if(f.type.startsWith("video/")){
-        if(f.size>80*1024*1024){alert(`"${f.name}" is too large (max 80MB). Trim it first.`);continue;}
-        newItems.push({id:Date.now()+Math.random(),type:"video",src:URL.createObjectURL(f),local:true,catId:selCat==="all"?"together":selCat,ts:Date.now(),uploader:myName||"Me",name:f.name});
+        if(f.size>200*1024*1024){alert(`"${f.name}" is too large (max 200MB). Trim it first.`);continue;}
+        setUploadMsg(`Compressing video ${i+1}/${files.length}… this can take about as long as the clip itself.`);
+        let blob=null;
+        try{ blob=await compressVideo(f); }catch{ blob=null; }
+        if(!blob){
+          if(f.size>15*1024*1024){alert(`"${f.name}" couldn't be compressed on this device and is too large to store as-is (max 15MB). Try a shorter clip.`);continue;}
+          blob=f;
+        }
+        if(blob.size>18*1024*1024){alert(`"${f.name}" is still too large after compression. Try a shorter clip.`);continue;}
+        setUploadMsg(`Saving video ${i+1}/${files.length}…`);
+        const b64=await new Promise(res=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=()=>res(null);r.readAsDataURL(blob);});
+        if(b64)setPhotoItem(id,{id,type:"video",src:b64,catId:selCat==="all"?"together":selCat,ts:Date.now(),uploader:myName||"Me",name:f.name});
       }
     }
-    setPhotos([...photos,...newItems]);setUploading(false);
+    setUploading(false);setUploadMsg("");
   };
 
-  const delItem=id=>ask("Delete this photo/video?",()=>{setPhotos(photos.filter(p=>p.id!==id));if(lightbox&&lightbox.id===id)setLightbox(null);});
+  const delItem=id=>ask("Delete this photo/video?",()=>{setPhotoItem(id,null);if(lightbox&&lightbox.id===id)setLightbox(null);});
   const addCat=()=>{if(!newCatLabel.trim())return;setCats([...cats,{id:"c_"+Date.now(),label:newCatEmoji+" "+newCatLabel.trim()}]);setNewCatLabel("");setAddCatM(false);};
   const delCat=id=>{if(DEF_CATS.find(c=>c.id===id)){alert("Can't delete a default category.");return;}ask("Delete this category?",()=>{setCats(cats.filter(c=>c.id!==id));if(selCat===id)setSelCat("all");});};
 
@@ -1779,6 +2038,7 @@ function GalleryPage({pageName,setPageName,myName}){
         </div>
       </div>
       <input ref={fileRef} type="file" accept="image/*,video/*" multiple style={{display:"none"}} onChange={handleUpload}/>
+      {uploading&&<p className="cap" style={{marginBottom:8,textAlign:"center"}}>{uploadMsg||"Uploading…"}</p>}
       <div className="tab-row">
         <button className={`tab${selCat==="all"?" on":""}`} onClick={()=>setSelCat("all")}>All ({photos.length})</button>
         {cats.map(c=><button key={c.id} className={`tab${selCat===c.id?" on":""}`} style={{display:"flex",alignItems:"center",gap:4}} onClick={()=>setSelCat(c.id)}>
@@ -1868,11 +2128,16 @@ function NotesPage({pageName,setPageName}){
 ═══════════════════════════════════════════ */
 function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,names,setNames,
   myName,theirName,startDate,onSettings,fbApiKey,setFbApiKey,fbDbUrl,setFbDbUrl,synced,
-  onReplayIntro,onTestMusic,musicPlaying,stopMusic}){
+  onReplayIntro,onTestMusic,musicPlaying,stopMusic,myRole}){
 
   const[bgDraft,setBgDraft]=useState(bgImage||"");
   const[sheet,setSheet]=useState(null); // which settings sheet is open, if any
   const closeSheet=()=>setSheet(null);
+  const[notifStatus,setNotifStatus]=useState(()=>typeof Notification!=="undefined"?Notification.permission:"unsupported");
+  const enableNotifs=async()=>{
+    const r=await subscribeToPush(myRole);
+    setNotifStatus(r==="granted"?"granted":r==="denied"?"denied":r);
+  };
 
 // Intro music — enabled independently per account
   const [musicEnabledUth, setMusicEnabledUth] = useState(() => gs("music_enabled_uthmaan", false));
@@ -2098,6 +2363,18 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
         <SettingsRow label="Private Notes PIN" value="Change" onClick={()=>{setNotesDraft("");setPinMsg("");setSheet("notesPin");}}/>
       </div>
 
+      {/* ── Notifications ── */}
+      <div className="card">
+        <h3 className="card-title" style={{marginBottom:4}}>Notifications</h3>
+        <p className="cap" style={{marginBottom:10}}>Get notified on this device when {theirName} sends a message, sticks a note, or pins a memory — only shown while the app/site is closed or in the background.</p>
+        <div className="srow">
+          <span style={{fontSize:14,fontWeight:500,color:"var(--ink)"}}>Status</span>
+          <span className="cap">{notifStatus==="granted"?"✅ Enabled":notifStatus==="denied"?"🚫 Blocked in browser settings":notifStatus==="unsupported"?"Not supported here":"Not enabled"}</span>
+        </div>
+        {notifStatus!=="granted"&&notifStatus!=="unsupported"&&<button className="btn-p" style={{marginTop:10}} onClick={enableNotifs}>Enable Notifications</button>}
+        {notifStatus==="denied"&&<p className="cap" style={{marginTop:8}}>Blocked — re-allow notifications for this site in your browser/phone settings, then tap the button above again.</p>}
+      </div>
+
       {/* ── Welcome & Music ── */}
       <div className="card">
         <h3 className="card-title" style={{marginBottom:4}}>Welcome & Music</h3>
@@ -2277,9 +2554,8 @@ function SettingsPage({pageName,setPageName,theme,setTheme,bgImage,setBgImage,na
 
       {sheet==="storage"&&<SettingsSheet title="Storage Info" onClose={closeSheet}>
         <p className="cap" style={{lineHeight:1.8}}>
-          Photos are compressed to ~100KB each. Firebase free tier holds ~7,000–16,000 photos (1GB limit).<br/><br/>
-          Videos are stored locally on-device only (LOCAL badge). For shared videos: use Firebase Storage (5GB free on Blaze plan) or share Google Drive links via Fridge notes.<br/><br/>
-          Upgrade to Firebase Blaze for ~£0.025/GB/month if you need more.
+          Photos are compressed to ~100KB each. Videos are compressed and saved the same way as photos now, so they survive history clears and show up on both devices — this can take roughly as long as the clip itself to process on upload. Firebase's free tier holds several thousand photos and hundreds of videos (1GB limit).<br/><br/>
+          Upgrade to Firebase Blaze for ~£0.025/GB/month if you ever need more.
         </p>
       </SettingsSheet>}
 
@@ -2598,6 +2874,15 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
   // keeps updating in the background no matter which page you're on, not
   // just while Home happens to be mounted. Throttled to avoid spamming
   // Firebase: at most once every 30s, or sooner if you've moved 50m+.
+  // Keep the push subscription fresh once permission was already granted —
+  // browsers can rotate the underlying subscription, so re-registering each
+  // session (silently, no permission prompt if already decided) keeps the
+  // other person's notifications actually reaching this device.
+  useEffect(()=>{
+    if(!tokenReady||!myRole)return;
+    if(typeof Notification!=="undefined"&&Notification.permission==="granted")subscribeToPush(myRole);
+  },[tokenReady,myRole]);
+
   const[liveLocOn]=useSync("live_loc_"+(myRole||"uthmaan"),false);
   useEffect(()=>{
     if(!tokenReady||!myRole||!liveLocOn||!navigator.geolocation)return;
@@ -2736,12 +3021,12 @@ const [fbDbUrl, setFbDbUrl] = useState(() => gs("fb_db_url", "https://ustag-22e9
       {page==="home"&&<HomePage myName={myName} theirName={theirName} startDate={startDate} nav={setPage} connEmoji={connEmoji} setConnEmoji={setConnEmoji} myRole={myRole} theirRole={theirRole}/>}
       {page==="them"&&<PartnerProfilePage theirName={theirName} startDate={startDate} theirRole={theirRole}/>}
       {page==="me"&&<MePage myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} pageName={names.me||DEF_NAMES.me} setPageName={makeNameSetter("me")} myRole={myRole} moodEmojis={moodEmojis} setMoodEmojis={setMoodEmojis}/>}
-      {page==="fridge"&&<FridgePage pageName={names.fridge||DEF_NAMES.fridge} setPageName={makeNameSetter("fridge")} myRole={myRole}/>}
+      {page==="fridge"&&<FridgePage pageName={names.fridge||DEF_NAMES.fridge} setPageName={makeNameSetter("fridge")} myRole={myRole} theirRole={theirRole}/>}
       {page==="dates"&&<DatesPage pageName={names.dates||DEF_NAMES.dates} setPageName={makeNameSetter("dates")}/>}
       {page==="map"&&<MapPage pageName={names.map||DEF_NAMES.map} setPageName={makeNameSetter("map")} myRole={myRole} theirRole={theirRole} myName={myName} theirName={theirName}/>}
       {page==="gallery"&&<GalleryPage pageName={names.gallery||DEF_NAMES.gallery} setPageName={makeNameSetter("gallery")} myName={myName}/>}
       {page==="notes"&&<NotesPage pageName={names.notes||DEF_NAMES.notes} setPageName={makeNameSetter("notes")}/>}
-      {page==="settings"&&<SettingsPage pageName={names.settings||DEF_NAMES.settings} setPageName={makeNameSetter("settings")} theme={theme} setTheme={setTheme} bgImage={bgImage} setBgImage={setBgImage} names={names} setNames={setNames} myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} fbApiKey={fbApiKey} setFbApiKey={setFbApiKey} fbDbUrl={fbDbUrl} setFbDbUrl={setFbDbUrl} synced={synced} onReplayIntro={()=>setShowIntro(true)} onTestMusic={playMusicFile} musicPlaying={musicPlaying} stopMusic={stopMusic}/>}
+      {page==="settings"&&<SettingsPage pageName={names.settings||DEF_NAMES.settings} setPageName={makeNameSetter("settings")} theme={theme} setTheme={setTheme} bgImage={bgImage} setBgImage={setBgImage} names={names} setNames={setNames} myName={myName} theirName={theirName} startDate={startDate} onSettings={onSettings} fbApiKey={fbApiKey} setFbApiKey={setFbApiKey} fbDbUrl={fbDbUrl} setFbDbUrl={setFbDbUrl} synced={synced} onReplayIntro={()=>setShowIntro(true)} onTestMusic={playMusicFile} musicPlaying={musicPlaying} stopMusic={stopMusic} myRole={myRole}/>}
       <BottomNav page={page} nav={setPage} names={names}/>
     </div>
     </ErrorBoundary>
